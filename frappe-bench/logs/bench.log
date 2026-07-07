@@ -1,0 +1,11 @@
+2026-07-07 11:00:28,614 DEBUG cd frappe-bench && uv venv env --seed --python /home/abhijithms/.pyenv/versions/3.11.13/bin/python
+2026-07-07 11:00:29,723 LOG Getting frappe
+2026-07-07 11:00:29,723 DEBUG cd frappe-bench/apps && git clone https://github.com/frappe/frappe.git --branch version-15 --depth 1 --origin upstream
+2026-07-07 11:00:47,234 LOG Installing frappe
+2026-07-07 11:00:47,235 DEBUG cd /home/abhijithms/Documents/Work/mobile_shop/frappe-bench && uv pip install --quiet -e /home/abhijithms/Documents/Work/mobile_shop/frappe-bench/apps/frappe  --python /home/abhijithms/Documents/Work/mobile_shop/frappe-bench/env/bin/python
+2026-07-07 11:00:48,476 DEBUG cd /home/abhijithms/Documents/Work/mobile_shop/frappe-bench/apps/frappe && yarn install --check-files
+2026-07-07 11:00:52,150 DEBUG cd frappe-bench && bench build
+2026-07-07 11:00:52,340 INFO /home/abhijithms/.local/bin/bench build
+2026-07-07 11:01:09,354 LOG setting up backups
+2026-07-07 11:01:09,375 LOG backups were set up
+2026-07-07 11:01:09,375 INFO Bench frappe-bench initialized
