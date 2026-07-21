@@ -22,13 +22,13 @@ Profit, VAT — committed 0e8efcc; Staff-blocked/Admin-full-access confirmed man
 in browser), Sales Entry search by brand/model (committed 57e6ea7 — `search_phones()`
 whitelisted method, In Stock phones only, permlevel-0 fields only; "Search by
 Brand/Model" dialog on the form; row click fills IMEI and phone_type confirmed
-manually in browser as both Staff and Admin).
+manually in browser as both Staff and Admin), Customer `address` field
+(optional Small Text, migrated and confirmed in `tabCustomer` schema).
 
 **Next task**: none currently queued — pick from "Small unfinished items" below,
 or one of the confirmation-gated items.
 
-**Small unfinished items**: Customer `address` field (optional). Also:
-`process_sale()` in sales_entry.py now has a server-side fallback (commit 36c2abf)
+**Small unfinished items**: `process_sale()` in sales_entry.py now has a server-side fallback (commit 36c2abf)
 that backfills `phone_type` from the linked Phone doc if the client-side JS didn't
 set it — added to fix two dev-data rows with NULL phone_type (SE-2026-07-00001,
 SE-2026-07-00003, manually backfilled via `frappe.db.set_value()`), but the
@@ -39,10 +39,15 @@ real-world check next time a Sales Entry is created via API/console/import.
 multi-category expansion (earbuds/accessories — leaning toward ERPNext's native
 Item/Serial No system, not extending Phone), full accounting integration
 (migrating custom Sales Entry/Purchase Entry to post to ERPNext's native
-Sales Invoice/Purchase Invoice/GL — a real architecture decision, not a bolt-on),
-any change to whether PMS invoices show a VAT amount (would contradict the NBR
-guide's explicit "must not show VAT amount" rule — needs reconfirmation, not
-assumption).
+Sales Invoice/Purchase Invoice/GL — a real architecture decision, not a bolt-on;
+**blocked on resolving the Customer/ERPNext-core naming collision first, see
+Hard Rule 10** — native Sales Invoice depends on ERPNext's own Customer
+doctype behavior), any change to whether PMS invoices show a VAT amount
+(would contradict the NBR guide's explicit "must not show VAT amount" rule —
+needs reconfirmation, not assumption). Also pending a decision (not urgent
+until the above is picked up): how to resolve the Customer naming collision
+itself — rename mobile_shop's doctype vs. formally cleaning up/taking over
+ERPNext's Customer.
 
 ## Hard rules — these came from real bugs, don't relearn them the hard way
 
@@ -101,6 +106,33 @@ assumption).
    don't add a field to one and forget the other; don't leave a stray
    `NULL as fieldname` placeholder when a field is simply supposed to be
    absent for a role.
+
+10. **The custom `Customer` doctype in this app is not cleanly separate from
+    ERPNext's core `Customer` doctype — it collided with it and won.** ERPNext
+    ships its own `Customer` doctype (`erpnext/selling/doctype/customer/customer.json`,
+    module "Selling"). mobile_shop's `customer.json` (module "Mobile Shop") uses
+    the identical doctype name. Frappe only allows one `tabDocType` row per
+    name, and app doctype-sync is additive-only (never drops columns), so:
+    the live `tabDocType` meta for "Customer" is currently mobile_shop's
+    version (confirmed via `frappe.get_doc("DocType", "Customer").module ==
+    "Mobile Shop"`) because mobile_shop syncs last in `apps.txt` order
+    (`frappe, erpnext, mobile_shop`) — but the physical `tabCustomer` MySQL
+    table still carries ~50 leftover ERPNext-core columns
+    (`customer_type`, `customer_group`, `territory`, `tax_id`,
+    `loyalty_program`, etc.) that were never cleaned up, dead weight from
+    before mobile_shop's definition took over. Discovered 2026-07-21 while
+    adding the `address` field — not caused by that change, pre-existing
+    since Customer was first created. This is the same failure mode the
+    Supplier decision deliberately avoided (see "General conventions"
+    below), just triggered in the opposite direction. Implication: **any
+    future work that touches ERPNext's native Customer-linked features
+    (Sales Invoice, Quotation, core Selling reports, the accounting-integration
+    item in "Do not start without explicit confirmation") must account for
+    this collision first** — don't assume "Customer" behaves like a normal
+    ERPNext core doctype, and don't assume it's a clean standalone custom
+    doctype either. Not yet fixed; needs a real decision (rename mobile_shop's
+    doctype, or formally take over/clean up ERPNext's Customer) before it's
+    touched further.
 
 ## Verification discipline — do not skip this
 
@@ -167,9 +199,11 @@ For every completed feature:
 doctypes wherever possible; keep all custom logic inside `mobile_shop`.
 
 **Built-in ERPNext doctypes reused as-is (never modify directly)**: Supplier,
-User, Role, Address, Contact, Print Format, Report. (Note: Customer is a
-CUSTOM doctype in this app, not ERPNext's core Customer — a deliberate
-choice made early on.)
+User, Role, Address, Contact, Print Format, Report. (Note: Customer was
+*intended* as a fully separate custom doctype, not ERPNext's core Customer —
+but it actually collides with ERPNext's core Customer doctype of the same
+name and currently overrides it. See Hard Rule 10 before assuming either
+description is accurate.)
 
 **Custom doctypes**: Phone, Customer, Purchase Entry, Sales Entry, plus 7
 Report doctypes (IMEI History, Sales, Purchase, Customer, Supplier,
