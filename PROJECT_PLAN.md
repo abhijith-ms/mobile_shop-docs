@@ -23,7 +23,7 @@ Do this step yourself so you understand the skeleton before handing anything to 
 
 ---
 
-## Phase 1 — Core Data Model
+## Phase 1 — Core Data Model ✅ DONE
 
 Build in this order. One DocType per Cline task.
 
@@ -32,15 +32,20 @@ Fields: IMEI (unique), Brand, Model, Storage, RAM, Color, Battery Health %, Phys
 
 Server-side validation: reject duplicate IMEIs before save.
 
-### 1.2 Supplier DocType
-Fields: Name, Phone, Email, CPR/ID (optional), Notes.
+### 1.2 Supplier — SKIPPED, using ERPNext core Supplier instead
+Originally planned as a custom DocType, but ERPNext already ships a built-in "Supplier" DocType (module: Buying) with more functionality (address/contact management, purchase history, etc.) than the placeholder needed. Creating a duplicate custom DocType with the same name caused a naming collision that silently broke migration — do not recreate this. Phone.supplier links directly to core Supplier.
+
+Note: hitting "New Supplier" the first time surfaced an unrelated ERPNext bug (`AttributeError: 'ERPNextAddress' object has no attribute 'is_your_company_address'`) caused by ERPNext's install completing before Redis was running, so its Address customizations never synced. Fixed via `frappe.reload_doctype("Address")` in the bench console, followed by a full migrate. Confirmed working after the fix.
 
 ### 1.3 Customer DocType
 Fields: Name, Phone, Email, CPR (optional).
 
 ---
 
-## Phase 2 — Purchase Workflow
+## Phase 2 — Purchase Workflow ✅ DONE
+
+Note: naming series in purchase_entry.json needed dots around variable tokens — correct Frappe syntax is `PE-.YYYY.-.MM.-.#####`, not `PE-YYYY-MM-#####`. Also a reminder for all future doctypes: place under `apps/mobile_shop/mobile_shop/mobile_shop/doctype/<name>/` (inside the module subfolder), and double-check for naming collisions with ERPNext core doctypes (Supplier, Customer, Item, etc. all already exist in ERPNext core) before creating anything with a generic name.
+
 
 Staff-facing form: scan/enter IMEI → select Supplier → enter Purchase Price, Brand, Model, Storage, Battery Health, Accessories → Save.
 
@@ -50,7 +55,14 @@ Staff-facing form: scan/enter IMEI → select Supplier → enter Purchase Price,
 
 ---
 
-## Phase 3 — Sales Workflow + VAT Engine (compliance-critical)
+## Phase 3 — Sales Workflow + VAT Engine (compliance-critical) ✅ DONE
+
+Verified end-to-end against NBR test case: purchase 200.000 BHD, sale 350.000 BHD → margin 150.000, VAT 13.636, net profit 136.364. Phone status flips to Sold on submit. Rejects re-selling a Sold phone and rejects unknown IMEIs cleanly.
+
+Two fixes applied during build (worth remembering for future doctypes):
+- `frappe.get_doc(doctype, filters)` raises DoesNotExistError rather than returning None — always check with `frappe.db.exists()` first if you need a clean error message instead of a raw traceback.
+- Bahrain Dinar uses 3 decimal places (fils), not the Frappe Currency default of 2. Explicitly set `"precision": "3"` on any Currency field holding BHD amounts (selling_price, margin, vat_amount, net_profit, purchase_price — done on both Phone and Purchase Entry).
+
 
 Staff-facing form: search/scan IMEI → select Customer → enter Selling Price → Save.
 
@@ -71,16 +83,129 @@ Purchase 2,000 BHD → Sale 3,000 BHD → Margin 1,000 → VAT 90.909 → Net 90
 
 ## Phase 4 — Invoice Print Format + Self-Billing Document
 
-### 4.1 Customer Invoice
+### 4.1 Customer Invoice ✅ DONE
+
+Verified: shows Invoice Number, Date, Customer Name, Brand, Model, IMEI, Total Price, and "VAT Included - Profit Margin Scheme" footer. Confirmed purchase_price/margin/vat_amount/net_profit do NOT appear anywhere.
+
+Note: when printing, make sure to select "PMS Customer Invoice" from the print format dropdown — Frappe defaults to the standard auto-generated format (which shows ALL fields including the restricted ones) unless you explicitly pick the custom one. Worth double-checking this every time until it's set as the default print format for this doctype.
+
 Must show: Phone, IMEI, Total Price, and wording equivalent to "VAT Included – Profit Margin Scheme".
 Must NOT show: Purchase Price, Profit, VAT amount, margin calculations.
 
-### 4.2 Self-Billing Document (new requirement from NBR guide, not in original PRD)
+### 4.2 Self-Billing Document (new requirement from NBR guide, not in original PRD) ✅ DONE
+
+Verified: shows document reference, purchase date, supplier name, device details, purchase price, signature line, and NBR compliance paragraph. Note: this document DOES show purchase price (unlike the customer invoice) — that's correct and intentional, since this is an internal acquisition record, not something the end customer sees.
+
+Bug hit + fixed: template initially referenced a "phone" field on Supplier which doesn't exist on ERPNext's core Supplier doctype — the correct field is "mobile_no" (populated from the linked primary contact). If it's blank, that's fine — the template just shows an empty value rather than erroring, as long as it's built with an `{% if %}` guard around it.
+
 When a phone is purchased from a non-VATable person (e.g. a private individual — your typical supplier case), NBR requires the dealer to self-issue a VAT invoice evidencing the acquisition, signed by the seller or their authorized signatory. Build a print format for this with a signature field, generated at Purchase save time.
 
 ---
 
-## Phase 5 — Permissions
+## Phase 5 — Permissions ✅ DONE
+
+Verified with a real "Mobile Shop Staff" test user (not just reading JSON):
+- Sales Entry: margin/vat_amount/net_profit correctly hidden (permlevel 1, no read for Staff).
+- Phone: purchase_price correctly hidden (permlevel 1, no read for Staff).
+- Delete blocked across all mobile_shop doctypes for Staff.
+- Staff can create/submit Purchase Entry and Sales Entry normally.
+- Admin/System Manager retain full visibility including all profit fields.
+
+Bugs hit + fixed (important for any future doctype/permission work):
+1. **Permlevel needs a matching level-1 permission row for every role**, not just `"permlevel": 1` on the field itself — each role needs both a level-0 row and a level-1 row in the doctype's `permissions` array, or restriction won't behave as expected.
+2. **Link fields to doctypes with no explicit role grant will block the whole form.** Staff had zero permission on ERPNext core Supplier, which blocked the entire Purchase Entry form (not just the Supplier field) with a "Not permitted" error. Fixed via **Role Permissions Manager** (Ctrl+G → "Role Permissions Manager") — the correct, non-invasive way to grant a role access to a core doctype without touching ERPNext core files. Granted Mobile Shop Staff Read + Create on Supplier at level 0.
+3. **`ignore_permissions=True` needed for automated cross-doctype writes.** When Purchase Entry's `on_submit` auto-creates a Phone record under a Staff session, `phone.insert()` silently drops any field the current user lacks write access to at its permlevel — so purchase_price was saving as 0 for Staff-submitted purchases. Fixed by using `phone.insert(ignore_permissions=True)` in `create_phone_record()`. This only bypasses permission checks, not `validate()` — the duplicate IMEI check still runs correctly.
+4. Python controller (.py) changes sometimes need a full `bench start` restart (Ctrl+C then restart) to take effect, not just `clear-cache` — don't trust "no restart needed" claims at face value if a fix doesn't seem to apply.
+
+---
+
+# Post-MVP Addition: New/Unused Phone Sales (client request)
+
+Client requested support for selling brand new/unused phones alongside second-hand ones. This matters for compliance, not just inventory — per the NBR guide (section 17.2), the Profit Margin Scheme only applies to used goods; new phones require standard VAT instead.
+
+**Confirmed with client:**
+- New/unused phone VAT rate: 10%.
+- Staff select, per sale, whether the entered selling price is VAT-inclusive or VAT-exclusive (not hardcoded).
+
+**Design:**
+- `phone_type` (Select: Used/New, default Used) — added to Phone and Purchase Entry. ✅ DONE, verified.
+- `vat_treatment` (Select: Inclusive/Exclusive) — to be added to Sales Entry, only relevant when phone_type = New.
+- Calculation branches:
+  - Used → unchanged PMS logic (margin ÷ 11), do not touch.
+  - New + Inclusive → VAT = selling_price ÷ 11, net = selling_price ÷ 1.1, customer pays selling_price.
+  - New + Exclusive → VAT = selling_price × 0.10, net = selling_price, customer pays selling_price × 1.10.
+- A second print format, "Standard VAT Invoice" (showing VAT breakdown, as normally required for non-PMS sales), needed for New phone sales — the existing "PMS Customer Invoice" (no VAT shown) stays for Used phone sales only.
+
+### ✅ DONE — verified by user directly in browser (not just Cline's self-report):
+- New phone + Inclusive VAT: correct (vat_amount = price÷11, net_profit = price÷1.1, total_charged = price, margin = 0)
+- New phone + Exclusive VAT: correct (vat_amount = price×0.10, net_profit = price, total_charged = price×1.10, margin = 0)
+- Used phone: unchanged, matches original PMS math exactly (no regression)
+- VAT Treatment field correctly hidden for Used, shown for New (depends_on)
+
+Bug hit + fixed during build: a whitelisted method (`get_phone_type`) was initially defined nested inside the `SalesEntry(Document)` class without `self`, which breaks the module-level dotted path (`mobile_shop.mobile_shop.doctype.sales_entry.sales_entry.get_phone_type`) that the client script calls it by. Frappe whitelisted methods invoked via dotted path from JS must be standalone module-level functions, not class methods. Fixed by moving it outside the class.
+
+**Still outstanding for this feature:** a second print format ("Standard VAT Invoice", showing the VAT breakdown) is needed for New-phone sales — the existing "PMS Customer Invoice" (no VAT shown) should remain reserved for Used-phone sales only. ✅ DONE.
+
+Verified end-to-end by user, both roles:
+- New phone + Inclusive: correct.
+- New phone + Exclusive: Price (Net) 200.000, VAT (10%) 20.000, Total Charged 220.000 — confirmed correct on actual printed invoice.
+- Confirmed working correctly for a Staff-logged-in user, not just Admin.
+- Confirmed margin/vat_amount/net_profit remain hidden on the regular form view for Staff — the print-time bypass only affects the print output, not form-level access.
+
+Bug hit + fixed: vat_amount/margin/net_profit are permlevel 1 (hidden from Staff), but this print format legitimately needs to SHOW vat_amount to the customer regardless of who's printing. Fixed by having the Jinja template fetch the value directly via `frappe.db.get_value(...)` inside the template rather than referencing `{{ doc.vat_amount }}` — a raw db lookup bypasses field-level permission checks, which is appropriate here since printing a required VAT figure to a customer isn't the same as exposing internal margin data to Staff.
+
+Caution for future testing: when verifying Sales Entry behavior, always double check the Phone Type on the actual test record before trusting the result — an initial test accidentally ran against a Used phone while intending to test the New-phone branch, which gave misleadingly-plausible-looking (but wrong-branch) numbers.
+
+Minor known issue (not yet investigated): one test invoice showed Brand/Model as "None" — worth checking whether that Phone record was just missing test data, or whether the print format's IMEI→Phone lookup has an edge case worth checking.
+
+---
+
+**Post-MVP New/Unused Phone feature is now fully complete**: phone_type tracking, branching VAT calculation (PMS margin for Used, standard 10% VAT for New with Inclusive/Exclusive options), and both compliant print formats.
+
+
+
+---
+
+# Post-MVP Addition: Camera-Based IMEI Scanning (client request)
+
+Added camera-based barcode/QR scanning (html5-qrcode library) as "Scan IMEI" button on Purchase Entry and Sales Entry, as a convenience alongside manual typing and USB/Bluetooth scanners (which already worked automatically via keyboard-wedge input, no code needed).
+
+### ✅ DONE — all issues found and fixed:
+1. **Button initially invisible / grouped under overflow "..." menu**: `frm.add_custom_button`'s third param groups buttons; removed to make it standalone. Also required using the `refresh` event (not `onload`) to reliably fire on new/unsaved documents.
+2. **Files accidentally deleted mid-session** by an overly-broad `rm -rf` from Cline. Recovered cleanly via `git restore` since the repo was git-tracked and files were previously committed. **Lesson: commit working states regularly**, and never let an agent run `rm -rf` near `apps/*/public/` source directories — only `sites/assets/` build output is safe to clean.
+3. **Camera wouldn't restart on 2nd/3rd scan attempt** (blank video, permission prompt fired but no feed) — root cause was TWO compounding issues:
+   - Reusing the same static DOM element ID (`imei-qr-scanner`) across sessions caused browser-level video rendering to break even though html5-qrcode's internal state reported "SCANNING" successfully. Fixed by generating a unique element ID per scanner session (`imei-qr-scanner-` + timestamp).
+   - The dialog's CSS layout/animation wasn't finished before `start()` was called on later attempts, so the target div had zero dimensions at call time. Fixed with a `waitForElementAndStart()` polling loop (via `requestAnimationFrame`) that waits for real `offsetWidth`/`offsetHeight` before starting the camera, rather than a fixed delay.
+   - Confirmed via detailed console logging (DOM state, instance IDs, post-start `<video>` element inspection) — guessing at fixes without this level of tracing burned several rounds before the real cause was found.
+4. **Luhn checksum validation**: added as a SOFT warning only (frappe.msgprint, orange indicator), not a hard block — staff must always be able to save with a non-standard IMEI (real-world second-hand inventory won't always be pristine). Only length/format (14-16 digits) is a hard reject. Applies uniformly via a shared `mobile_shop/utils/imei.py` module, called from Phone, Purchase Entry, AND Sales Entry (initially missed on Sales Entry — a 13-digit EAN saved successfully there until this gap was caught and fixed).
+5. IMEI-SV (16-digit) values correctly skip Luhn checking entirely, since that format doesn't carry a real check digit.
+
+Confirmed by user directly in browser: scan → clear → rescan → rescan again, all working; hard-reject on invalid length confirmed on Sales Entry; soft warning on bad checksum confirmed allowing save.
+
+---
+
+# Post-MVP Addition: Simplified Workspace UI (client feedback)
+
+Client saw the raw ERPNext sidebar (full module list) and asked for something simpler and more focused. Addressed in two parts:
+
+1. **Hid all unrelated ERPNext modules** (Accounting, Buying, Selling, Stock, Assets, Manufacturing, Quality, Projects, Support, Website, CRM, Tools, ERPNext Settings, Integrations, Build) from the sidebar via Workspace visibility settings — done manually by user, not code.
+
+2. **Redesigned the "Mobile Shop" workspace itself** into a proper dashboard: ✅ DONE
+   - "Overview" section with 3 live Number Cards: Phones In Stock (filtered count, status="In Stock"), Sales This Month, Purchases This Month (both using Timespan filters on their date fields).
+   - "Daily Tasks" section: Sales Entry / Purchase Entry shortcuts.
+   - "Records" section: Phone / Customer / Supplier shortcuts.
+   - Verified: Timespan "this month" filters genuinely apply correctly (confirmed via manual date-range query matching the card's live count exactly), not just coincidentally equal to the total.
+
+Bugs hit + fixed during this round:
+1. `bench --site <site> export-fixtures` reported success and Number Card *records* were created correctly, but the Workspace's own `content` field (which defines layout/blocks) was NOT updated by the same export — required directly setting `ws.content` via `frappe.get_doc("Workspace", ...)` + `.save()` in the bench console instead of trusting fixture export/import for this specific field.
+2. Workspace content JSON block schema (for "header" and "number_card" block types) had to be reverse-engineered by inspecting a working built-in workspace's actual stored `content` field (via `frappe.db.get_value("Workspace", "Home", "content")`) rather than guessed — guessing produced blocks that silently failed to render with no error.
+3. Number Cards showing `show_percentage_stats: 1` triggered a genuine bug in Frappe core itself (`get_percentage_difference` → `TypeError: 'NoneType' object is not callable`) — worked around by setting `show_percentage_stats: 0` on all cards, since a simple count doesn't need a trend comparison anyway.
+4. Initial Timespan filter value (`"next 30 days"`) was wrong direction (future dates, not current month) and also malformed structure — correct syntax is `[["<Doctype>", "<date_fieldname>", "Timespan", "this month"]]`.
+
+**Lesson reinforced**: for Frappe UI/config-as-data features (workspaces, number cards, print formats), "the export/fixture command succeeded" and "the correct schema was used" are separate claims — verify both against a known-working example in the same Frappe version rather than trusting either in isolation.
+
+** Inventory tracking with IMEI uniqueness, purchase workflow, PMS-compliant sales/VAT engine, both required print formats, and role-based permissions are all built and verified. Remaining: Phase 6 (dashboard/reports) — lower priority since it only reads data the earlier phases already produce correctly.
+
 
 - Staff role: can create Purchase and Sales records, cannot see Purchase Price / profit fields on Sales, cannot delete records, cannot touch VAT Settings, cannot manage users.
 - Admin role: full access to everything, including profit/margin reports.
@@ -256,3 +381,52 @@ Leave a "Mobile Shop Admin" role (or use existing System Manager) with full acce
 ---
 
 *Keep this file in your project root and update the checkboxes/status as each phase completes.*
+
+---
+
+# Critical Frappe Lesson: "Standard" Doctypes, Fixtures, and Migrate Behavior
+
+Discovered the hard way across the Workspace redesign AND the Number Card dashboard — worth reading before touching either again, or before building any other Workspace/Number Card/similar "standard" doctype feature.
+
+**The problem:** Workspace and Number Card are both `is_standard: 1` doctypes. This means:
+1. They auto-sync from their own **module-level JSON files** (e.g. `mobile_shop/mobile_shop/workspace/mobile_shop/mobile_shop.json`, `mobile_shop/mobile_shop/number_card/<name>/<name>.json`) during `bench migrate`.
+2. **BUT this sync is INSERT-ONLY** — it creates the record if it doesn't exist, but does NOT update an already-existing record, no matter how many times you edit the file and re-migrate. (Confirmed by testing directly: editing the file, migrating, and checking the DB value — it never changed until set via `frappe.db.set_value()` in the console.)
+3. **If the doctype is ALSO listed in `hooks.py`'s `fixtures = [...]`**, this creates a SECOND, independent sync mechanism using a totally different file path (`mobile_shop/fixtures/<doctype>.json`), which CAN overwrite existing records with stale content on every migrate. This was the actual cause of the workspace/number-card content repeatedly reverting to old versions — stale `fixtures/workspace.json` and `fixtures/number_card.json` files (the latter full of ERPNext's own default cards from Manufacturing/Assets/CRM, unrelated to this app) kept re-importing over the real data.
+
+**The permanent fix applied:**
+1. Removed `"Workspace"` and `"Number Card"` from `fixtures` in `hooks.py` entirely.
+2. Deleted the stale `mobile_shop/fixtures/workspace.json` and `mobile_shop/fixtures/number_card.json` files.
+3. For any ALREADY-EXISTING record needing correction, fix it directly via `frappe.db.set_value(...)` + `frappe.db.commit()` in the bench console — editing the module JSON file alone does NOT fix an existing record, only future fresh installs.
+4. Always verify a fix survives by running `bench migrate` at least twice in a row and refreshing the browser each time — one successful migrate is not proof the fix is permanent.
+
+**Specific bugs fixed under this pattern:**
+- Workspace `content` kept reverting to the old plain-shortcut-list layout.
+- Number Card `show_percentage_stats` kept reverting to `1`, triggering a genuine Frappe CORE bug (`get_percentage_difference` → `TypeError: 'NoneType' object is not callable`) whenever a card tried to show a trend comparison. Fixed by setting to `0`.
+- Number Card `filters_json` kept reverting to an invalid flat-dict format instead of the correct list-of-lists format: `[["Sales Entry", "sale_date", "Timespan", "this month"]]`.
+
+**Script Report folder naming is NOT arbitrary.** Frappe derives the expected Python module path automatically from the Report's `name` field (scrubbed: lowercased, spaces→underscores). A report named "IMEI History Report" MUST live in folder `imei_history_report` with file `imei_history_report.py` — not a shorter name like `imei_history`, even if the JSON's `"name"` field is correct. Wrong folder name → `ModuleNotFoundError` at runtime.
+
+**Recovery technique that worked:** when unsure whether current file content matches a previously-verified version, check `git log`/`git show` against a known-good commit rather than reconstructing from memory or trusting an AI agent's summary of "what changed."
+
+---
+
+# Phase 6 — Reports ✅ PARTIALLY DONE (5 of 8)
+
+Five reports built, individually schema-verified (via real `frappe.get_meta(...).get_fieldnames()` output, never assumed), and confirmed working in the browser as both Staff and Admin:
+
+1. **IMEI History Report** — full lifecycle by IMEI. Admin-only: Purchase Price.
+2. **Sales Report** — filterable by date/customer/IMEI/brand/model/VAT treatment. Admin-only: Purchase Price, Margin, VAT Amount, Net Profit. Staff-visible: Total Charged.
+3. **Purchase Report** — filterable by date/supplier/IMEI/brand/phone type. Admin-only: Purchase Price.
+4. **Customer Report** — purchase count and total spent, COALESCE-safe for zero-sales customers. Same for both roles.
+5. **Supplier Report** — purchase count and total purchase value. Admin-only: Total Purchase Value. Admin-only "Include Disabled Suppliers" filter.
+
+**Consistent pattern used across all five** (deviating from this caused every bug hit along the way):
+- `has_admin_role()`: `bool(set(frappe.get_roles(frappe.session.user)) & {"Mobile Shop Admin", "System Manager"})`.
+- Sensitive fields (purchase_price, margin, vat_amount, net_profit) OMITTED ENTIRELY from both the `columns` list AND the SQL SELECT when not admin — never fetched, never a NULL placeholder. A `"permlevel": 1` tag on a Script Report column does NOT enforce anything by itself — Script Reports run raw SQL directly, bypassing document-level field permissions.
+- Column lists built via `.append()` + `",\n".join(...)`, never manual comma concatenation (caused a real double-comma SQL bug once).
+
+**Two/three reports were built with entirely FABRICATED schema fields in a rushed, unreviewed batch and deleted**: Inventory Report, Profit Report, VAT Report (plus an early broken IMEI History variant). Referenced non-existent child tables (`tabPurchase Entry Item`, `tabSales Entry Item` — this app has NO child tables) and invented fields (`grade`, `posting_date`, `customer_name`, `cr_number`, `mobile_number`, "unpaid amounts", etc.). **Lesson: always run `frappe.get_meta(doctype).get_fieldnames()` and show the REAL output before writing report code — never batch-build multiple reports without reviewing each one individually first.**
+
+**Workspace integration**: All five reports added as Shortcut blocks under a "Reports" header, built using Frappe's visual Workspace Editor (not hand-written JSON — repeated hand-written JSON attempts produced blank/broken pages). When adding a Shortcut to a Report, its "Type" field must be explicitly set to "Report" — defaults to "DocType" and won't show reports in the picker otherwise.
+
+**Remaining, not yet built**: Inventory Report, Profit Report, VAT Report — needed per the original PRD, must be rebuilt from scratch with proper schema verification and one-at-a-time review, exact same pattern as the five working reports above.

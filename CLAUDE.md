@@ -1,0 +1,282 @@
+# Mobile Shop ERP — Project Conventions
+
+Custom Frappe app (`mobile_shop`) on ERPNext 15, for a second-hand + new mobile phone
+retailer in Bahrain. Site: `mobileshop.local`. Repo root: this directory
+(`apps/mobile_shop`, git-tracked, branch `develop`).
+
+Full build history and detailed debugging narratives live in `PROJECT_PLAN.md` in this
+repo — read it on demand when working on something with prior history (e.g. "check
+PROJECT_PLAN.md for context on the Sales Report SQL bug"), not automatically every
+session.
+
+## Current state (update this section as work progresses)
+
+**Done and verified**: Phone/Customer doctypes, ERPNext core Supplier (reused, not
+custom), Purchase Entry, Sales Entry, Bahrain Profit Margin Scheme VAT engine (verified
+against the actual NBR guide), New/Used phone VAT branching (standard 10%
+Inclusive/Exclusive vs PMS margin scheme), 3 print formats, role permissions
+(Mobile Shop Staff vs Admin/System Manager), camera IMEI scanner, IMEI validation
+(hard reject on length, soft warn on Luhn), workspace dashboard with 3 Number Cards,
+7 of 8 planned reports (IMEI History, Sales, Purchase, Customer, Supplier, Inventory,
+Profit).
+
+**Next task**: VAT Report (Admin-only, same hard-permission-guard pattern as
+Profit Report — see rules below).
+
+**Small unfinished items**: Customer `address` field (optional), Sales Entry search
+by brand/model (currently IMEI-only).
+
+**Do not start without explicit confirmation** (open questions, decisions pending):
+multi-category expansion (earbuds/accessories — leaning toward ERPNext's native
+Item/Serial No system, not extending Phone), full accounting integration
+(migrating custom Sales Entry/Purchase Entry to post to ERPNext's native
+Sales Invoice/Purchase Invoice/GL — a real architecture decision, not a bolt-on),
+any change to whether PMS invoices show a VAT amount (would contradict the NBR
+guide's explicit "must not show VAT amount" rule — needs reconfirmation, not
+assumption).
+
+## Hard rules — these came from real bugs, don't relearn them the hard way
+
+1. **Workspace and Number Card are "standard" doctypes.** They sync from
+   module-level JSON files on `bench migrate`, but that sync is INSERT-ONLY —
+   it never updates an already-existing record, no matter how many times you
+   edit the file and migrate. To fix an existing broken record, set values
+   directly via `frappe.db.set_value(...)` + `frappe.db.commit()` in the bench
+   console. Also: neither doctype should be listed in `hooks.py`'s `fixtures`
+   list — that creates a second, competing sync mechanism from
+   `fixtures/<doctype>.json` that can silently overwrite real data with stale
+   content on every migrate.
+
+2. **Script Report folder/file names are derived automatically from the
+   Report's `name` field** (scrubbed: lowercased, spaces→underscores). A
+   report named "VAT Report" MUST live in folder `vat_report/` with file
+   `vat_report.py` — not a shorter or "cleaner" name. Wrong folder name causes
+   `ModuleNotFoundError` at runtime even if the JSON name field is correct.
+
+3. **`"permlevel": 1` on a Script Report column enforces NOTHING by itself.**
+   Script Reports run raw SQL directly, bypassing normal document-level field
+   permissions entirely. Any sensitive field (purchase_price, margin,
+   vat_amount, net_profit) must be omitted ENTIRELY from both the `columns`
+   list and the SQL SELECT clause when the user isn't admin — never fetched,
+   never a NULL placeholder. Use a shared `has_admin_role()` pattern:
+   `bool(set(frappe.get_roles(frappe.session.user)) & {"Mobile Shop Admin", "System Manager"})`.
+   For fully Admin-only reports (e.g. Profit Report, VAT Report): the JSON
+   `roles` array must list ONLY Admin/System Manager (no Staff), AND
+   `execute()` must call `has_admin_role()` as its literal first line and
+   `frappe.throw(_("Not permitted"), frappe.PermissionError)` if false —
+   belt-and-suspenders, not either/or.
+
+4. **Always verify schema before writing any report/query code.** Run
+   `frappe.db.get_table_columns("<Doctype>")` in the bench console and use
+   the real output. Never assume field names. A past batch attempt fabricated
+   fields like `grade`, `posting_date`, `cr_number` that don't exist anywhere
+   in this schema — caused real time loss to find and fix.
+
+5. **Bahrain Dinar uses 3 decimal places (fils)**, not Frappe's Currency
+   default of 2. Always set `"precision": "3"` on BHD currency fields.
+
+6. **Naming series need dots around variable tokens**:
+   `PE-.YYYY.-.MM.-.#####`, not `PE-YYYY-MM-#####`.
+
+7. **Never run `rm -rf` near `apps/*/public/` or any source directory.**
+   Only `sites/assets/` build output is safe to clean. If files do get lost,
+   check `git status` / `git log` first — this repo is git-tracked, most
+   accidental deletions are recoverable via `git restore`.
+
+8. **When building any query report, build the column list via
+   `.append()`/list construction and join with `",\n".join(...)`** — never
+   manual string concatenation with commas. A silent double-comma SQL bug
+   happened once from hand-managing commas across conditional columns.
+
+9. **Column list and SQL SELECT list must be built together, consistently** —
+   don't add a field to one and forget the other; don't leave a stray
+   `NULL as fieldname` placeholder when a field is simply supposed to be
+   absent for a role.
+
+## Verification discipline — do not skip this
+
+After any migrate, DO NOT assume a fix worked just because the command
+succeeded with no errors. For Workspace/Number Card/Report changes
+specifically, run `bench migrate` at least twice in a row and check the
+actual browser state each time — one successful migrate is not proof a fix
+is permanent (see rule 1).
+
+After implementing anything with role-based visibility (permlevel fields,
+Admin-only reports), the verification is NOT complete until a human has
+manually checked BOTH roles in the actual browser — Staff should see the
+restricted view, Admin should see everything, and for hard-blocked reports,
+Staff should get a genuine permission error, not a blank page. Do not report
+something as "verified" based on code review or a dry run alone.
+
+## General conventions (from AI_RULES.md)
+
+- Never modify ERPNext core. All customizations stay inside the `mobile_shop` app.
+- Reuse ERPNext features whenever possible; never duplicate existing ERPNext
+  functionality. (This is why Supplier uses ERPNext's core doctype rather than
+  a custom one — a past attempt at a custom Supplier caused a naming collision
+  that silently broke migration. Apply the same instinct to the pending
+  multi-category/Item decision.)
+- Prefer configuration over hardcoded values.
+- Python for business logic; JavaScript only for UI enhancements.
+- All VAT/margin calculations run server-side only — never trust client-side
+  calculations. Validate all user input. Validate IMEI uniqueness before save.
+- Mobile-first, responsive, minimal typing, large touch targets. (This is a
+  live open item — see "Open items" above regarding custom UI / POS.)
+- Type hints where appropriate; clear comments for complex logic; small
+  functions; reuse utilities (e.g. the shared `has_admin_role()` pattern,
+  the shared `mobile_shop/utils/imei.py` validation module).
+- **When unsure, stop and ask — do not guess requirements or introduce new
+  dependencies.** This has been the single most effective rule in practice:
+  every real bug in this project was ultimately caught by stopping to verify
+  (schema, browser state, actual file contents) rather than assuming.
+
+### One important update to "one feature per prompt, finish before starting another"
+
+This rule is correct and validated by real experience — the one time it was
+violated (batch-implementing 4 reports at once without individual review)
+produced reports built against a completely fabricated schema, which had to
+be deleted and redone one at a time. Hold this rule firmly: **one report/
+feature at a time, reviewed and manually verified in the browser before
+starting the next**, even when it feels slower.
+
+### Git workflow (from AI_RULES.md, with one addition)
+
+For every completed feature:
+1. Review code (see files before trusting a summary of them).
+2. Run `bench migrate` and `bench restart`.
+3. **For anything touching Workspace, Number Card, or Report doctypes:
+   run `bench migrate` a second time and re-check the browser** — these
+   are standard doctypes with insert-only sync quirks (see Hard Rule 1)
+   and a single successful migrate is not proof a fix is permanent.
+4. Test manually in the browser — for anything with role-based visibility,
+   test as BOTH Staff and Admin, not just Administrator.
+5. Commit with a meaningful message.
+
+## Architecture (from ARCHITECTURE.md, corrected against what was actually built)
+
+**Philosophy**: extend ERPNext, don't replace it. Reuse built-in ERPNext
+doctypes wherever possible; keep all custom logic inside `mobile_shop`.
+
+**Built-in ERPNext doctypes reused as-is (never modify directly)**: Supplier,
+User, Role, Address, Contact, Print Format, Report. (Note: Customer is a
+CUSTOM doctype in this app, not ERPNext's core Customer — a deliberate
+choice made early on.)
+
+**Custom doctypes**: Phone, Customer, Purchase Entry, Sales Entry, plus 7
+Report doctypes (IMEI History, Sales, Purchase, Customer, Supplier,
+Inventory, Profit — VAT Report pending), 3 Number Cards, 1 Workspace.
+
+**"Mobile Shop Settings" singleton (VAT Rate, Business Name, Invoice Footer,
+Warranty Defaults) — NOT YET BUILT.** VAT rates are currently hardcoded in
+calculation logic, not read from a settings doctype. Legitimate future
+improvement, but do not assume this doctype exists.
+
+### Corrected folder structure (the real, working structure)
+
+The original architecture doc showed `mobile_shop/doctype/...` — this is
+WRONG and caused a real bug once (a doctype placed at that level silently
+failed to register in migrate). The actual, verified-working structure
+nests one level deeper:
+
+```
+mobile_shop/                           <- app root
+├── mobile_shop/                       <- module folder (note: same name, nested)
+│   ├── mobile_shop/                   <- doctype module (name matches modules.txt)
+│   │   ├── doctype/
+│   │   │   ├── phone/
+│   │   │   ├── customer/
+│   │   │   ├── purchase_entry/
+│   │   │   └── sales_entry/
+│   │   ├── report/
+│   │   │   ├── imei_history_report/
+│   │   │   ├── sales_report/
+│   │   │   ├── purchase_report/
+│   │   │   ├── customer_report/
+│   │   │   ├── supplier_report/
+│   │   │   ├── inventory_report/
+│   │   │   ├── profit_report/
+│   │   │   └── vat_report/            <- pending
+│   │   ├── number_card/
+│   │   │   ├── phones_in_stock/
+│   │   │   ├── sales_this_month/
+│   │   │   └── purchases_this_month/
+│   │   ├── workspace/
+│   │   │   └── mobile_shop/
+│   │   └── utils/
+│   │       └── imei.py                <- shared IMEI validation, used by
+│   │                                      Phone, Purchase Entry, Sales Entry
+│   ├── public/js/
+│   │   ├── imei_scanner.js            <- shared camera scanner module
+│   │   ├── sales_entry.js
+│   │   └── purchase_entry.js
+│   └── hooks.py
+```
+
+Always verify against this real structure (or `find mobile_shop/mobile_shop
+-maxdepth 3 -type d` on the actual repo) before creating a new doctype/
+report/etc. — never assume a shallower path.
+
+### Relationships
+
+```
+Supplier (ERPNext core) --> Purchase Entry --> Phone --> Sales Entry --> Customer (custom)
+```
+
+### Bahrain VAT — current, correct logic (supersedes the single-formula
+version in the original doc, which predates the New/Used split)
+
+**Used phones (Profit Margin Scheme)**:
+```
+Margin = Selling Price - Purchase Price
+If Margin <= 0: Margin = 0, VAT = 0, Net Profit = 0
+Else: VAT = Margin / 11
+      Net Profit = Margin / 1.1
+```
+Verified against the actual NBR Profit Margin Scheme guide. Invoice must NOT
+show the VAT amount (NBR requirement) — only that VAT is included under PMS.
+
+**New phones, Inclusive**:
+```
+VAT = Selling Price / 11
+Net Profit = Selling Price / 1.1
+Total Charged = Selling Price
+```
+
+**New phones, Exclusive**:
+```
+VAT = Selling Price × 0.10
+Net Profit = Selling Price
+Total Charged = Selling Price × 1.10
+```
+New-phone invoices (Standard VAT Invoice) DO show the VAT amount explicitly
+— opposite of the PMS invoice rule above.
+
+`margin`, `vat_amount`, `net_profit`, `purchase_price` are permlevel-1
+fields — see Hard Rule 3 above for how visibility is actually enforced
+(never just the permlevel tag alone).
+
+### Future expansion (from ARCHITECTURE.md — now cross-referenced against
+actual client requests, see "Open items" above)
+
+The original doc already anticipated: ERPNext Stock integration, Serial
+Number integration, Purchase Receipt integration, Sales Invoice integration,
+repair tracking, multi-branch, warranty. This turned out to correctly
+anticipate the client's later accounting-integration proposal (Phase A) and
+the accountant's bulk-intake-by-model / IMEI-at-sale-only workflow — i.e.
+the direction this was always heading is now confirmed as the right one,
+just not yet started. See "Open items" above for current status of each.
+
+## Environment
+
+- Bench root: `~/Documents/Work/mobile_shop/frappe-bench`
+- App path: `~/Documents/Work/mobile_shop/frappe-bench/apps/mobile_shop`
+- Site: `mobileshop.local`
+- Start dev server: `bench start` (must be running in its own terminal)
+- Migrate: `bench --site mobileshop.local migrate`
+- Console: `bench --site mobileshop.local console`
+- Two git repos exist: this inner one (`apps/mobile_shop/`) is the one that
+  matters and has real commit history. An outer repo at
+  `~/Documents/Work/mobile_shop/` is mostly unused — don't worry about it.
+- Camera-scanning features require HTTPS or localhost (browser restriction).
+  Use an ngrok tunnel for testing on a real device:
+  `ngrok http 8000 --host-header="mobileshop.local:8000"`

@@ -1,2 +1,18 @@
 .venv/
 __pycache__/
+
+# Frappe bench runtime files
+frappe-bench/sites/
+frappe-bench/logs/
+frappe-bench/config/pids/
+frappe-bench/archived/
+frappe-bench/Procfile
+frappe-bench/patches.txt
+
+# Temporary files
+list-apps*
+pms_customer_invoice.html
+
+# External apps (managed separately)
+frappe-bench/apps/erpnext/
+frappe-bench/apps/frappe/
