@@ -20,11 +20,25 @@ Inclusive/Exclusive vs PMS margin scheme), 3 print formats, role permissions
 7 of 8 planned reports (IMEI History, Sales, Purchase, Customer, Supplier, Inventory,
 Profit).
 
-**Next task**: VAT Report (Admin-only, same hard-permission-guard pattern as
-Profit Report — see rules below).
+**Built, pending manual browser verification**: VAT Report (Admin-only, 8th and
+final planned report — same hard-permission-guard pattern as Profit Report; committed
+0e8efcc). Filters: from_date, to_date, vat_treatment (Standard/PMS/All, derived from
+phone_type — NOT read off Sales Entry's own vat_treatment field, which only holds
+Inclusive/Exclusive and is only populated for New-phone sales), phone_type. Move to
+"Done and verified" (8 of 8 reports) once a human has checked both Staff (blocked)
+and Admin (full access) in the actual browser.
+
+**Next task**: none currently queued — pick from "Small unfinished items" below,
+or one of the confirmation-gated items, once VAT Report verification lands.
 
 **Small unfinished items**: Customer `address` field (optional), Sales Entry search
-by brand/model (currently IMEI-only).
+by brand/model (currently IMEI-only). Also: `process_sale()` in sales_entry.py now
+has a server-side fallback (commit 36c2abf) that backfills `phone_type` from the
+linked Phone doc if the client-side JS didn't set it — added to fix two dev-data
+rows with NULL phone_type (SE-2026-07-00001, SE-2026-07-00003, manually backfilled
+via `frappe.db.set_value()`), but the fallback code itself hasn't been exercised by
+an actual submit yet — worth a quick real-world check next time a Sales Entry is
+created via API/console/import.
 
 **Do not start without explicit confirmation** (open questions, decisions pending):
 multi-category expansion (earbuds/accessories — leaning toward ERPNext's native
