@@ -32,10 +32,20 @@ backfilled to "Used" with correct margin/VAT/net_profit, then cleaned up
 — test entry cancelled+deleted, phone reverted to In Stock, no residue).
 
 **Next task**: none currently queued — small unfinished items are all closed
-out. Next up is deciding the Customer/ERPNext-core naming collision (Hard
-Rule 10) — see "Do not start without explicit confirmation" below.
+out.
 
 **Small unfinished items**: none currently open.
+
+**Customer/ERPNext-core naming collision (Hard Rule 10) — explicitly deferred
+2026-07-21.** Options considered: rename mobile_shop's doctype (cleanest,
+frees up "Customer" for native ERPNext use later, but touches Link field
+options across Sales Entry/reports/print formats/workspace); formally take
+over "Customer" and drop the ~50 dead ERPNext-core columns via a patch
+(simpler, but commits to never using ERPNext's native Customer/Sales Invoice
+without redoing this); leave as-is (chosen — not causing runtime problems
+today, revisit only if/when accounting integration is actually picked up).
+Do not silently "fix" this later without re-raising it — it was a deliberate
+deferral, not an oversight.
 
 **Do not start without explicit confirmation** (open questions, decisions pending):
 multi-category expansion (earbuds/accessories — leaning toward ERPNext's native
