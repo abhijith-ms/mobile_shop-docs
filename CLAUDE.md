@@ -17,28 +17,23 @@ against the actual NBR guide), New/Used phone VAT branching (standard 10%
 Inclusive/Exclusive vs PMS margin scheme), 3 print formats, role permissions
 (Mobile Shop Staff vs Admin/System Manager), camera IMEI scanner, IMEI validation
 (hard reject on length, soft warn on Luhn), workspace dashboard with 3 Number Cards,
-7 of 8 planned reports (IMEI History, Sales, Purchase, Customer, Supplier, Inventory,
-Profit).
-
-**Built, pending manual browser verification**: VAT Report (Admin-only, 8th and
-final planned report — same hard-permission-guard pattern as Profit Report; committed
-0e8efcc). Filters: from_date, to_date, vat_treatment (Standard/PMS/All, derived from
-phone_type — NOT read off Sales Entry's own vat_treatment field, which only holds
-Inclusive/Exclusive and is only populated for New-phone sales), phone_type. Move to
-"Done and verified" (8 of 8 reports) once a human has checked both Staff (blocked)
-and Admin (full access) in the actual browser.
+8 of 8 planned reports (IMEI History, Sales, Purchase, Customer, Supplier, Inventory,
+Profit, VAT — committed 0e8efcc; Staff-blocked/Admin-full-access confirmed manually
+in browser), Sales Entry search by brand/model (committed 57e6ea7 — `search_phones()`
+whitelisted method, In Stock phones only, permlevel-0 fields only; "Search by
+Brand/Model" dialog on the form; row click fills IMEI and phone_type confirmed
+manually in browser as both Staff and Admin).
 
 **Next task**: none currently queued — pick from "Small unfinished items" below,
-or one of the confirmation-gated items, once VAT Report verification lands.
+or one of the confirmation-gated items.
 
-**Small unfinished items**: Customer `address` field (optional), Sales Entry search
-by brand/model (currently IMEI-only). Also: `process_sale()` in sales_entry.py now
-has a server-side fallback (commit 36c2abf) that backfills `phone_type` from the
-linked Phone doc if the client-side JS didn't set it — added to fix two dev-data
-rows with NULL phone_type (SE-2026-07-00001, SE-2026-07-00003, manually backfilled
-via `frappe.db.set_value()`), but the fallback code itself hasn't been exercised by
-an actual submit yet — worth a quick real-world check next time a Sales Entry is
-created via API/console/import.
+**Small unfinished items**: Customer `address` field (optional). Also:
+`process_sale()` in sales_entry.py now has a server-side fallback (commit 36c2abf)
+that backfills `phone_type` from the linked Phone doc if the client-side JS didn't
+set it — added to fix two dev-data rows with NULL phone_type (SE-2026-07-00001,
+SE-2026-07-00003, manually backfilled via `frappe.db.set_value()`), but the
+fallback code itself hasn't been exercised by an actual submit yet — worth a quick
+real-world check next time a Sales Entry is created via API/console/import.
 
 **Do not start without explicit confirmation** (open questions, decisions pending):
 multi-category expansion (earbuds/accessories — leaning toward ERPNext's native
