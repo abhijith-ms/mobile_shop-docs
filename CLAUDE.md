@@ -23,17 +23,19 @@ in browser), Sales Entry search by brand/model (committed 57e6ea7 — `search_ph
 whitelisted method, In Stock phones only, permlevel-0 fields only; "Search by
 Brand/Model" dialog on the form; row click fills IMEI and phone_type confirmed
 manually in browser as both Staff and Admin), Customer `address` field
-(optional Small Text, migrated and confirmed in `tabCustomer` schema).
+(optional Small Text, migrated and confirmed in `tabCustomer` schema),
+`process_sale()` server-side `phone_type` fallback (commit 36c2abf — backfills
+`phone_type` from the linked Phone doc if the client-side JS didn't set it;
+confirmed 2026-07-21 with a real test submit via console: created a Sales
+Entry with `phone_type` unset, submitted it, confirmed it was correctly
+backfilled to "Used" with correct margin/VAT/net_profit, then cleaned up
+— test entry cancelled+deleted, phone reverted to In Stock, no residue).
 
-**Next task**: none currently queued — pick from "Small unfinished items" below,
-or one of the confirmation-gated items.
+**Next task**: none currently queued — small unfinished items are all closed
+out. Next up is deciding the Customer/ERPNext-core naming collision (Hard
+Rule 10) — see "Do not start without explicit confirmation" below.
 
-**Small unfinished items**: `process_sale()` in sales_entry.py now has a server-side fallback (commit 36c2abf)
-that backfills `phone_type` from the linked Phone doc if the client-side JS didn't
-set it — added to fix two dev-data rows with NULL phone_type (SE-2026-07-00001,
-SE-2026-07-00003, manually backfilled via `frappe.db.set_value()`), but the
-fallback code itself hasn't been exercised by an actual submit yet — worth a quick
-real-world check next time a Sales Entry is created via API/console/import.
+**Small unfinished items**: none currently open.
 
 **Do not start without explicit confirmation** (open questions, decisions pending):
 multi-category expansion (earbuds/accessories — leaning toward ERPNext's native
