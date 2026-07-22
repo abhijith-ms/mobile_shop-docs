@@ -19,7 +19,11 @@ Inclusive/Exclusive vs PMS margin scheme), 3 print formats, role permissions
 (hard reject on length, soft warn on Luhn), workspace dashboard with 3 Number Cards,
 8 of 8 planned reports (IMEI History, Sales, Purchase, Customer, Supplier, Inventory,
 Profit, VAT — committed 0e8efcc; Staff-blocked/Admin-full-access confirmed manually
-in browser), Sales Entry search by brand/model (committed 57e6ea7 — `search_phones()`
+in browser). **Correction 2026-07-22**: "8 of 8 on the dashboard" was never actually
+true — the reports themselves were built and permission-verified correctly, but the
+live Workspace record was missing shortcuts for Inventory/Profit/VAT Report entirely
+(see the workspace-drift entry further down); fixed as part of the POS work.
+Sales Entry search by brand/model (committed 57e6ea7 — `search_phones()`
 whitelisted method, In Stock phones only, permlevel-0 fields only; "Search by
 Brand/Model" dialog on the form; row click fills IMEI and phone_type confirmed
 manually in browser as both Staff and Admin), Customer `address` field
@@ -31,10 +35,20 @@ Entry with `phone_type` unset, submitted it, confirmed it was correctly
 backfilled to "Used" with correct margin/VAT/net_profit, then cleaned up
 — test entry cancelled+deleted, phone reverted to In Stock, no residue).
 
-**Next task**: none currently queued — small unfinished items are all closed
-out.
-
-**Small unfinished items**: none currently open.
+**Next task**: three narrow items left on the POS, all human/hardware-side,
+no code known to be needed — (1) the camera-scanner path specifically on
+a real tablet/phone browser (desktop testing so far used typed/wedge
+input); (2) a quick pass as the real Staff user confirming no margin/VAT/
+profit figures appear anywhere in the POS UI; (3) one real print once the
+thermal printer physically arrives, to confirm the driver honors 80mm
+sizing (stated from the start as the one thing that can't be verified
+without hardware). Once those land: nothing else currently queued for the
+multi-category expansion plan — Phases 1, 2, 3a (code), and 3b are all
+done. One thing still outstanding, human-side,
+not code: decide whether `Sales Entry` stays visible in the workspace nav as a
+historical-only doctype or gets hidden for new-entry purposes (explicitly
+deferred design question, not urgent). Full plan at
+`~/.claude/plans/mossy-brewing-wren.md`.
 
 **Multi-category expansion (accessories) — Phase 1 built, two real bugs
 found and fixed via actual Staff browser testing** (commits 131356d,
@@ -285,6 +299,99 @@ fresh submitted one incremented by exactly 1.
 
 **Multi-category expansion (accessories) plan is now fully implemented in
 code** (Phases 1, 2, 3a, 3b).
+
+**Custom POS checkout screen — built in 4 commits, desktop end-to-end path
+now fully human-verified 2026-07-22** (plan at
+`~/.claude/plans/silly-mapping-piglet.md`). Desk Page at
+`/app/mobile-shop-pos` (not a portal page — html5-qrcode/`imei_scanner.js`
+load via `app_include_js`, Desk-only). Deliberately thin server layer:
+`pos_scan()` resolves a code to a phone or accessory by actual lookup
+(never a length heuristic), `create_pos_sale()` builds and submits a real
+`Shop Sale` with no `ignore_permissions` — every rule (mixing block, stock
+checks, VAT math, permlevel) is inherited from Phase 2's already-verified
+code, confirmed empirically (a PMS+accessory cart through the POS is
+rejected by the document's own `validate_no_pms_standard_mix`, not a POS-
+side reimplementation).
+
+Before building the cart-input flow on it, verified — not assumed from a
+code read — that `imei_scanner.js`'s `openScanner(null, {onScanSuccess})`
+survives with `frm` null: ran the real file under stubbed browser APIs
+driving the whole open→camera-start→scan-success→cleanup path. Camera UI
+itself (real DOM/timing) still needs the browser.
+
+`is_walk_in` (Check, on `Customer`) plus a POS-only rule: a cart containing
+a phone line requires a named customer, enforced *only* in
+`create_pos_sale`, not in `ShopSale.validate()` — confirmed both halves
+(blocked via the POS, allowed via a direct document with the same
+walk-in+phone combination) and stated back to the user as a deliberate
+asymmetry before proceeding: VAT-scheme mixing is an NBR compliance
+invariant that must hold everywhere, this is an operational guardrail an
+admin correction can legitimately bypass.
+
+Two new 80mm print formats (`Shop Sale PMS Receipt`/`Shop Sale Standard
+Receipt`) reuse the exact Jinja from Phase 3a's A4 formats. Sizing
+correction worth remembering: goes in Print Format's `css` field, not
+`margin_top/bottom/left/right` (PDF-path-only, never reached by classic
+`/printview`) — and the `css` has to actively override
+`standard.css`'s `.print-format` max-width/padding or the receipt renders
+A4-padded on 80mm paper. Print buttons use `frappe.utils.print()` (the
+same helper ERPNext's own POS calls), letterhead passed as `''` not
+`null` (`encodeURIComponent(null)` → literal string `"null"` in the URL).
+
+A user report of "no print buttons after a sale" turned out not to be a
+code bug — reproduced the exact shipped script (fetched via the real
+`frappe.desk.desk_page.get` loader) under jsdom + real jQuery with the
+exact `.layout-main-section` markup `make_app_page` builds, and it worked
+end to end with zero errors. Confirmed live in-browser afterward
+(green banner, both buttons, 0 console errors) — left as-is, no fix
+needed. Two harness pitfalls hit and fixed along the way, worth
+remembering for any future test like this: jQuery 4's UMD wrapper
+self-binds at `require()` time if `global.window` is already set (so
+`require('jquery')`, not `require('jquery')(window)`); jsdom's
+`window.eval` doesn't execute in the window's own realm unless
+`runScripts: "dangerously"` is set, so `frappe.provide` must bridge
+`window.X`/`global.X` onto the same object for bare identifiers to
+resolve.
+
+Workspace shortcut (commit d8c4a4b) surfaced something much bigger than
+"add one shortcut": the **live** Workspace record had drifted hard from
+the on-disk module JSON (Hard Rule 1 — sync is insert-only) — missing
+Inventory/Profit/VAT Report shortcuts entirely (see the corrected "Done
+and verified" note above), `module` was `"Setup"` not `"Mobile Shop"`,
+`icon` was `"retail"` not `"smartphone"`, `roles` was empty, and `links`
+carried 17 unrelated ERPNext-core entries (Chart of Accounts, Item,
+Warehouse, etc.) — all consistent with the workspace having been built
+via the visual Workspace Editor from a cloned generic template at some
+point (matches the editor-history note already in PROJECT_PLAN.md), never
+cleaned up. Confirmed the scope expansion with the user before fixing
+beyond "add the POS shortcut". Fixed directly on the live record via
+`frappe.get_doc(...).save()` (module, icon, links, roles, shortcuts,
+content), verified through two migrates AND independently through
+`frappe.desk.desktop.get_desktop_page()` — the actual API the browser
+calls — confirming all 14 shortcuts resolve cleanly. On-disk file rewritten
+to match, using the *live* shortcut structure as the base (Sales
+Entry/Purchase Entry as lookup-only List shortcuts) rather than the file's
+old "New Sale"/"New Purchase" (`doc_view: New`) design, which predates and
+now contradicts the POS decision — staff create sales through the POS, not
+the raw Sales Entry form.
+
+**Desktop end-to-end pass, done 2026-07-22**: real mixed New-phone +
+accessory sale (a real Item Barcode the user had to debug their way into
+creating first — itself confirms the Item Barcode/Item Code distinction
+landed correctly, not just that the code happened to work) — scan → cart
+→ complete → both Receipt and Invoice printed, independently re-checked
+math (250 phone + 400 accessory = 650 subtotal, ×10% Exclusive VAT =
+65, total 715 — all correct), 80mm receipt reflow matched the A4 invoice's
+figures exactly, and the desk-form Shop Sale document underneath was
+structured correctly (one phone line, one accessory line qty 2, correct
+rolled-up totals). Desktop path (typed/wedge input) considered solid.
+
+**Small unfinished items**: the 3 items in "Next task" above (tablet
+camera-scanner path, Staff-role no-leak pass, one real print once the
+thermal printer arrives) — otherwise the POS build is considered done;
+human browser verification of Phase 3a's A4 print formats specifically
+(separate from the POS's thermal receipts, which have been
+live-confirmed).
 
 **Customer/ERPNext-core naming collision (Hard Rule 10) — explicitly deferred
 2026-07-21.** Options considered: rename mobile_shop's doctype (cleanest,
