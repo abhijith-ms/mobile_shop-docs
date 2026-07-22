@@ -584,6 +584,24 @@ ERPNext's Customer.
     directly (same technique as the Workspace-drift verification) and check
     whether `custom_blocks.items` is actually populated first.
 
+13. **A Desk Page's client script (`page/<name>/<name>.js`) can be served
+    stale from Redis's page-cache even after `bench migrate` + `bench
+    restart` + a hard browser refresh (`Ctrl+Shift+R`).** Confirmed while
+    editing `mobile_shop_pos.js` to add the customer phone-search button:
+    the button was verifiably present in the source file
+    (`grep`-confirmed) and `bench build --app mobile_shop` had run clean,
+    but the live POS page kept rendering the old markup through repeated
+    hard reloads with the browser's own cache cleared each time (console
+    even logged "Cleared App Cache"). The fix was
+    `bench --site mobileshop.local clear-cache` — only after that did the
+    new button appear. This is a distinct failure mode from Hard Rule 1
+    (Workspace/Number Card insert-only *doctype* sync): this one is a
+    server-side Redis cache of the compiled page bundle, not a database
+    sync issue, and no `bench build` output or browser dev-tools signal
+    hinted at it. When a verified-correct Page JS edit doesn't show up
+    live, reach for `bench clear-cache` before suspecting the browser or
+    the edit itself.
+
 ## Verification discipline — do not skip this
 
 After any migrate, DO NOT assume a fix worked just because the command
