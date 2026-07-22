@@ -602,6 +602,32 @@ ERPNext's Customer.
     live, reach for `bench clear-cache` before suspecting the browser or
     the edit itself.
 
+14. **The `Administrator` account bypasses every permission check
+    unconditionally — testing "as Admin" using it does NOT verify what the
+    `Mobile Shop Admin` or `System Manager` *role* actually grants.**
+    Discovered while building the POS's void-sale feature: `shop_sale.json`
+    had never set a `cancel` permission key for any role, on any of Staff,
+    System Manager, or Mobile Shop Admin. Frappe's `cancel` DocPerm field
+    defaults to `0` when the key is absent — it does **not** inherit from
+    `submit`, confirmed directly in `docperm.json`. So in reality, nobody
+    could cancel a Shop Sale. This stayed completely invisible through
+    every earlier "Admin" browser-verification pass in this project,
+    because every one of them logged in as the literal `Administrator`
+    superuser account (per Hard Rule/CLAUDE.md convention, since that's the
+    only admin-tier login this project's human tester has used) — and
+    `frappe.has_permission()` returns `True` for `Administrator` regardless
+    of DocPerm rows entirely. Confirmed empirically:
+    `frappe.set_user("Administrator"); frappe.has_permission("Shop Sale",
+    "cancel")` → `True`, but the same check against a real non-superuser
+    account holding only the `System Manager` role → `False`, on the exact
+    same (missing) permission row. **Any future permission-related
+    verification that matters — not just UI smoke-testing — needs to run
+    against a real non-superuser account carrying the role in question
+    (e.g. `abhijithms.9526@gmail.com`, which holds `System Manager`), not
+    just `Administrator`.** `Administrator` remains fine for non-permission
+    testing (data correctness, UI rendering, business logic) where its
+    bypass doesn't matter.
+
 ## Verification discipline — do not skip this
 
 After any migrate, DO NOT assume a fix worked just because the command
