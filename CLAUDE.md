@@ -73,6 +73,40 @@ untouched.
 **Phase 1 fully verified 2026-07-21**: user confirmed in browser as both
 Mobile Shop Staff and Admin — good on both roles. Phase 1 is closed out.
 
+**Phase 2 — unified `Shop Sale` checkout, built and functionally verified,
+not yet browser-verified** (commit f74c02d, 2026-07-21): new `Shop Sale`
+doctype with two child tables, `Phone Sale Item` (IMEI) and `Item Sale
+Line` (barcode/qty), so one sale can mix phones and accessories. Extracted
+the New-phone Inclusive/Exclusive and Used-phone PMS formulas out of
+`sales_entry.py` into shared `mobile_shop/utils/vat.py`; re-ran the NBR
+regression case after the refactor (2000→3000 = margin 1000/vat 90.909/
+net 909.091) — unchanged. `validate()` hard-blocks a Used/PMS phone line
+from coexisting with any standard-VAT line (New phone OR accessory) — a
+New phone shows its VAT amount explicitly, same conflict as PMS+accessory.
+
+Bug caught during review (by the user, before accepting Phase 2 as done):
+the first version of that check only looked at `item_sale_lines`, so a
+Used+New phone pair (zero accessories) slipped through undetected — fixed
+by widening the check to cover any PMS-vs-standard combination, not just
+phone-vs-accessory. All five combinations re-verified directly against
+`insert()`: Used+New blocked, Used+Accessory blocked, New+Accessory
+allowed, Used+Used allowed, New+New allowed.
+
+Before trusting `permlevel 1` on child table fields — new territory, this
+app had no child tables before, and margin/vat_amount/net_profit hiding is
+compliance-critical — traced Frappe's source
+(`apply_fieldlevel_read_permissions` in `document.py`) to confirm child-row
+permlevel fields are redacted based on the *parent* doctype's permission
+rows, then verified empirically via the real `getdoc` code path (what the
+desk form actually uses) as both the live Staff user and Administrator:
+Staff cannot see `margin`/`vat_amount`/`net_profit` on phone rows or
+`total_vat_amount` on the parent; Admin sees everything. Also ran the full
+create/save/submit flow as the real Staff user. All test data cleaned up
+each round, confirmed no residue, pre-existing user data untouched.
+
+**Phase 2 fully verified 2026-07-21**: user confirmed in browser as both
+Mobile Shop Staff and Admin — good on both roles. Phase 2 is closed out.
+
 **Customer/ERPNext-core naming collision (Hard Rule 10) — explicitly deferred
 2026-07-21.** Options considered: rename mobile_shop's doctype (cleanest,
 frees up "Customer" for native ERPNext use later, but touches Link field
