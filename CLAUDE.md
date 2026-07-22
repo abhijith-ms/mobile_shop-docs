@@ -138,6 +138,154 @@ shows "None".
 **Still pending**: a human browser pass on Phase 3a (both formats, both
 roles).
 
+**Phase 3b — reviewed report-by-report plan approved 2026-07-21, in
+progress.** Reading the actual code first (not assuming) found only 5 of
+the 8 reports touch `Sales Entry` at all — Purchase Report, Supplier
+Report, Inventory Report query only `Purchase Entry`/`Phone`/`Supplier`
+and are staying untouched, as approved. Order: IMEI History → Customer →
+Sales → Profit → VAT (simplest/lowest-stakes first, Admin-only
+compliance-critical last), then the `Sales This Month` Number Card
+(document_type swap, not a report change) once the pattern is proven.
+Each report: snapshot real baseline before touching anything, implement,
+confirm historical rows byte-identical, fresh create-sell-verify-cleanup-
+reconfirm cycle, commit individually (clean revert point per report, not
+one blob).
+
+1. **IMEI History Report — done** (commit 4f143e7). LEFT JOIN + COALESCE
+   (not UNION — this report is Phone-centric, one row per Phone) onto
+   `Phone Sale Item`/`Shop Sale`, both filtered `docstatus=1`.
+   `invoice_number` column changed `Link(Sales Entry)` → `Data` since it
+   can now hold a name from either doctype. Two real gaps caught by the
+   user reviewing before moving to report #2 (worth remembering for any
+   future report touching multiple sale sources): (a) confirmed
+   empirically, not just by reading the SQL, that the `docstatus=1` join
+   filters actually work — cancelling a Shop Sale correctly drops its row
+   with no duplication; (b) a phone with a submitted row in BOTH sources
+   (possible via the unsupported manual-status-reset "return" path) was
+   resolved by blind `COALESCE(se.x, ss.x)` — Sales Entry always won
+   regardless of which was actually more recent. Fixed to compare
+   `creation` timestamps and pick one source consistently across all four
+   sale-related columns together (never mixed field-by-field). Also
+   discovered 3 of the user's own real phones (sold via Shop Sale during
+   Phase 2/3a testing) were showing `Sold` with completely blank sale info
+   under the old report — confirmed all 3 now correct.
+
+2. **Customer Report — done** (commit ccb2645). `purchase_count`/
+   `total_sales` count per Shop Sale *document*, not per line item —
+   explicit design decision confirmed with the user before implementing:
+   reuses Shop Sale's own already-computed `total_charged` (UNION ALL of
+   Sales Entry + Shop Sale, both `docstatus=1`, then grouped) rather than
+   reconstructing the Inclusive/Exclusive/PMS VAT math per line in raw SQL
+   a second time. Verified the historical-only customer byte-identical,
+   independently cross-checked the user's real customer's new totals (4
+   purchases, 1400.000) against a manual `frappe.get_all` sum rather than
+   trusting the report's own SQL. Noted but explicitly untouched: two of
+   the user's real historical Sales Entry records have `total_charged =
+   0.000` despite a non-zero `selling_price` — pre-existing data quality
+   issue, unrelated to this work.
+
+3. **Sales Report — done** (commit a551a5f). Most complex of the 5: UNION
+   ALL of Sales Entry + `Phone Sale Item` + `Item Sale Line`, `docstatus
+   IN (0,1)` throughout (matches this report's existing draft-inclusive
+   behavior), filters applied once on the outer query against unified
+   column names rather than duplicated per branch. New "Line Type"
+   (Phone/Accessory) column, item_name in the Model/Description column
+   for accessory rows, IMEI/Brand blank — per the design decision made
+   before implementing. Brand/Model filters exclude accessory lines;
+   surfaced via the report's `message` return value (shown as a note atop
+   the report) whenever either filter is active, so a "Samsung" filter's
+   total can't be misread as "all Samsung revenue." Caught a bug in my own
+   first draft before testing: the Model filter matched the unified
+   `model` output column, which doubles as item_name for accessories —
+   without a `line_type='Phone'` guard, a model search could have
+   incidentally matched an accessory whose name coincided with a phone
+   model string. `total_charged` per line computed inline from
+   selling_price/phone_type/vat_treatment only (never from the
+   permlevel-1 fields) since it's permlevel 0 everywhere already and the
+   formula is the same non-sensitive relationship already in
+   `mobile_shop/utils/vat.py`.
+
+   Security-critical per explicit instruction (this report is
+   Staff-visible and now touches `Item Sale Line.vat_amount`, permlevel 1,
+   new in this report): purchase_price/margin/vat_amount/net_profit
+   appended to every UNION branch only inside the `is_admin` guard, never
+   a NULL placeholder. Verified as the real Staff user, not just by
+   inspecting the column list — confirmed all four fields absent from
+   both the column list and every row's actual data across all 9 real
+   rows. Also independently cross-checked Shop Sale row numbers against
+   the real document (a mixed phone+accessory sale's two report rows sum
+   to the document's own `total_charged`), and specifically tested the
+   Exclusive-VAT branch (no existing real data covered it) with a fresh
+   phone+accessory Shop Sale — both lines' computed totals reconciled
+   exactly with the real submitted document.
+
+4. **Profit Report — done** (commit 760954a). Line-level, not
+   document-level — distinct from Customer Report's per-document choice,
+   per explicit instruction: UNION ALL with ONLY `Phone Sale Item`, never
+   `Item Sale Line`. Accessories carry no margin/profit concept, so an
+   accessory-only sale contributes nothing and a mixed New-phone+accessory
+   sale contributes only its phone line, by construction (Item Sale Line
+   is structurally absent from the query) rather than by a filter that
+   could be gotten wrong. `has_admin_role()` hard gate confirmed unchanged
+   (still the literal first line of `execute()`) and re-verified as the
+   real Staff user — hard-blocked with `PermissionError`.
+
+   Verified: historical rows byte-identical; confirmed the real
+   accessory-only Shop Sale is entirely absent from the report; explicit
+   test per instruction - a fresh mixed New-phone+accessory Shop Sale
+   (document `total_charged` 280.000 = 220 phone + 60 accessory) produces
+   exactly one report row showing 220.000, not 280.000, confirming
+   accessory revenue never reaches profit math even when bundled with a
+   phone in the same document.
+
+5. **VAT Report — done** (commit 46b033c). Most compliance-critical of
+   the five. UNION ALL of Sales Entry + `Phone Sale Item` (PMS/Standard by
+   `phone_type`) + `Item Sale Line` (always Standard). Detail rows sum
+   `vat_amount` at LINE level; summary card transaction counts use
+   PER-DOCUMENT counting instead (explicit decision, distinct from Profit
+   Report's line-level choice) — unambiguous specifically because
+   `validate_no_pms_standard_mix` guarantees every Shop Sale document
+   belongs to exactly one scheme, so a document's rows never split
+   between the two count buckets. `has_admin_role()` gate confirmed
+   unchanged.
+
+   Strictest verification of all five: recorded exact Standard/PMS/
+   grand-total VAT for 3 date ranges (all-time, the one real month, a
+   zero-data month) from both the live report AND independent raw SQL
+   before touching anything — PMS 27.272/2 transactions, matched exactly
+   both ways. After the change: PMS side exact match on all 3 ranges
+   (untouched, no historical PMS Shop Sale data exists); Standard side
+   (all new) independently cross-checked via raw SQL summing both child
+   tables' vat_amount and counting distinct documents separately —
+   127.273 across 4 documents, matched exactly. Fresh isolated-date-range
+   test (2026-03-15) with one Shop Sale per scheme, including a mixed
+   New-phone+accessory document as the direct test of the counting
+   decision — 4 detail rows across 3 documents, confirmed the mixed
+   document counted as exactly 1 Standard transaction not 2, every
+   figure matched hand-computed expectations exactly. Cleaned up,
+   reconfirmed all 3 historical ranges (including the isolated range
+   dropping back to zero) exactly unchanged.
+
+**Phase 3b fully done 2026-07-21** (commit e7e1527 closes it out): all 5
+reports needing Shop Sale integration done (Purchase Report, Supplier
+Report, Inventory Report correctly left untouched, never touched Sales
+Entry) plus the `Sales This Month` Number Card — `document_type` swapped
+Sales Entry → Shop Sale via direct `db.set_value` (Hard Rule 1, module
+JSON alone would never have touched the live record), explicit
+`docstatus=1` filter added. Worth remembering: the OLD card never
+actually had a docstatus filter either — `frappe.get_list()` doesn't
+implicitly exclude drafts/cancelled, confirmed empirically; the dashboard
+happened to look right only because no draft/cancelled Sales Entries
+existed this month, not because anything filtered them. The new card's
+`docstatus=1` filter is a deliberate correction, not a faithful carry-over
+of what the old one technically did. Verified via the real `get_result()`
+call the dashboard actually invokes: matched an independent manual COUNT,
+confirmed a fresh draft+cancelled pair didn't move the count, confirmed a
+fresh submitted one incremented by exactly 1.
+
+**Multi-category expansion (accessories) plan is now fully implemented in
+code** (Phases 1, 2, 3a, 3b).
+
 **Customer/ERPNext-core naming collision (Hard Rule 10) — explicitly deferred
 2026-07-21.** Options considered: rename mobile_shop's doctype (cleanest,
 frees up "Customer" for native ERPNext use later, but touches Link field
