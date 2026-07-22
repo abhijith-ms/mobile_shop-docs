@@ -393,6 +393,48 @@ human browser verification of Phase 3a's A4 print formats specifically
 (separate from the POS's thermal receipts, which have been
 live-confirmed).
 
+**Custom homepage/launcher screen — done and browser-verified 2026-07-22**
+(plan at `~/.claude/plans/silly-mapping-piglet.md`, substantially revised
+mid-build — see below). Replaces the Mobile Shop Workspace as the default
+landing surface: tiles for all 3 daily tasks, all 8 reports, and the 3
+Records doctypes, filtered per-tile by the same permission gates the
+framework itself uses (`Report.is_permitted()` +
+`frappe.has_permission(ref_doctype, "report")`, `Page.is_permitted()`,
+`frappe.has_permission(doctype, "read")`) — never a new, hand-rolled rule.
+Profit Report/VAT Report tiles each check their OWN report module's
+`has_admin_role()` (imported separately, never shared) after the user
+explicitly caught a plan draft that implied reusing one for both — verified
+by confirming `admin_check is profit_report_has_admin_role` (not the VAT
+one) for the Profit tile and vice versa.
+
+Found and fixed a real, pre-existing, previously-undocumented bug while
+building this (not caused by it): Staff could see the Supplier Report
+shortcut on the existing Workspace but got a hard `PermissionError` if they
+actually clicked it — confirmed via the real
+`frappe.desk.query_report.run()` entrypoint. Root cause: the Supplier
+`Custom DocPerm` for Mobile Shop Staff (granted during the Phase 1 Item
+work) had `read`/`create`/`export` but never `report`. Fixed by setting
+`report: 1` on that row; re-confirmed Staff can now actually run the
+report.
+
+The plan's original routing mechanism (`add_to_apps_screen` hook +
+`System Settings.default_app`, landing on a standalone Desk Page) turned
+out not to work — see Hard Rule 11. Pivoted mid-build, with the user's
+explicit approval, to a new "Mobile Shop Home" Workspace (name checked
+against collision with ERPNext's own pre-existing "Home" workspace first)
+containing a single Custom HTML Block that runs the tile-grid JS/CSS, with
+`User.default_workspace` set directly on both real accounts. Also hit and
+fixed Hard Rule 12 (the block silently didn't render — nothing to do with
+sanitization or shadow-DOM script execution, both of which were
+independently ruled out first). The original "Mobile Shop" Workspace is
+completely untouched and still reachable from the sidebar.
+
+Verified end-to-end, both roles, in the real browser: correct tiles per
+role (Staff: 12, no Profit/VAT; Admin: 14), navigation confirmed for one
+tile of each type (DocType/Report/Page), touch-target sizing, and that a
+fresh login/`/app` visit lands on the new page while the old Workspace
+stays reachable unchanged.
+
 **Customer/ERPNext-core naming collision (Hard Rule 10) — explicitly deferred
 2026-07-21.** Options considered: rename mobile_shop's doctype (cleanest,
 frees up "Customer" for native ERPNext use later, but touches Link field
@@ -505,6 +547,42 @@ ERPNext's Customer.
     doctype either. Not yet fixed; needs a real decision (rename mobile_shop's
     doctype, or formally take over/clean up ERPNext's Customer) before it's
     touched further.
+
+11. **`add_to_apps_screen` + `System Settings.default_app`/`User.default_app`
+    cannot point at a standalone Desk Page if the app owns any Workspace at
+    all.** `frappe.apps.get_default_path()` calls `get_apps()`, which runs
+    every hook route through `frappe.apps.get_route()` — and that function
+    treats any `/app/<slug>` route as naming a *Workspace*, not a Page. If
+    the slug doesn't match a real Workspace name, it silently falls through
+    to "the first Workspace belonging to this app's module" and returns
+    *that* route instead, discarding the hook's own route value entirely.
+    Confirmed empirically (twice) on this app: a hook route of
+    `/app/mobile-shop-home` resolved to `/app/mobile-shop` (the existing
+    Workspace) for every user. There is no way to point this mechanism at a
+    Page while a Workspace exists. To make a non-Workspace-shaped experience
+    the default landing surface, either build it as a Workspace (see Hard
+    Rule 12 for the Custom HTML Block gotcha) and set `User.default_workspace`
+    directly — that field is read *before* `get_default_path()` in
+    `auth.py`'s `set_user_info()` and bypasses `get_route()`'s rewriting
+    entirely — or don't try to change the default landing page at all.
+
+12. **A Workspace's `content` JSON `custom_block` entry only controls layout
+    position — it does NOT make the block available to fetch.** The actual
+    data source `get_desktop_page()` (the real API the browser calls) uses
+    for `custom_blocks` is a separate child table on the Workspace document
+    itself (`custom_blocks`, doctype `Workspace Custom Block`, fields
+    `custom_block_name`/`label`) — exactly parallel to how `shortcuts` and
+    `number_cards` each need both a `content` block *and* a real child-table
+    row, but easy to miss for `custom_block` since most examples only cover
+    shortcuts. Omitting the child-table row produces total silence: no
+    console error, nothing in the Network tab worth flagging, the block
+    element just never gets data and renders nothing — `get_desktop_page()`
+    returns `custom_blocks: {"items": []}` even though the Custom HTML Block
+    document itself is fine and the `content` JSON correctly names it. Before
+    suspecting sanitization or shadow-DOM script execution for a
+    non-rendering Custom HTML Block, call `frappe.desk.desktop.get_desktop_page()`
+    directly (same technique as the Workspace-drift verification) and check
+    whether `custom_blocks.items` is actually populated first.
 
 ## Verification discipline — do not skip this
 
