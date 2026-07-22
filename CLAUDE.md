@@ -36,6 +36,43 @@ out.
 
 **Small unfinished items**: none currently open.
 
+**Multi-category expansion (accessories) — Phase 1 built, two real bugs
+found and fixed via actual Staff browser testing** (commits 131356d,
+edfda3b, 2026-07-21): reuses ERPNext's native `Item`/`Item Barcode` as
+product/barcode master data (no Stock Ledger/Warehouse/accounting
+involvement, same reuse-not-duplicate pattern as Supplier); new
+`current_stock` Custom Field on `Item` (Int, read-only, default 0) via
+`fixtures/custom_field.json`, scoped by filter in `hooks.py` (not a bare
+doctype export); new `Item Purchase` doctype (mirrors `Purchase Entry`:
+item_code/item_name(fetched)/qty/supplier/purchase_price/purchase_date,
+naming series `IP-.YYYY.-.MM.-.#####`) whose `on_submit` atomically
+increments `Item.current_stock` via raw SQL; whitelisted
+`get_item_by_barcode()` looks up the `Item Barcode` child table;
+`imei_scanner.js` generalized (`addScanButton`/`openScanner` now take an
+optional `options` object — fieldname/buttonLabel/dialogTitle/
+successMessage/onScanSuccess callback) so `Item Purchase` reuses it for
+barcode scanning without touching the existing Sales Entry/Purchase Entry
+callers, which pass no options and are unaffected.
+
+Bugs caught: (1) `validate()`'s `if self.qty and self.qty <= 0` silently
+skipped the check when `qty == 0` (falsy-zero) — caught in my own console
+testing, fixed to `if self.qty is not None and self.qty <= 0`. (2) Staff
+had zero permission rows on core `Item` at all, so the barcode-scan's
+`fetch_from` on `item_name` failed with "Cannot Fetch Values" — caught by
+the user's own Staff browser test, fixed with a `Custom DocPerm` granting
+Staff Read-only on Item (Role-Permission-Manager style, same pattern as
+the original Supplier grant, but this one IS persisted as a fixture,
+unlike that one). (3) `purchase_price` was wrongly `permlevel 1` on Item
+Purchase (copied from `Phone`'s cost field instead of `Purchase Entry`'s,
+which is `permlevel 0`) — per explicit decision, staff enter this value
+themselves so it isn't sensitive like margin/net_profit; removed. Confirmed
+via live meta check that `Purchase Entry.purchase_price` never had this
+problem. `margin`/`net_profit` on `Sales Entry` remain `permlevel 1`,
+untouched.
+
+**Phase 1 fully verified 2026-07-21**: user confirmed in browser as both
+Mobile Shop Staff and Admin — good on both roles. Phase 1 is closed out.
+
 **Customer/ERPNext-core naming collision (Hard Rule 10) — explicitly deferred
 2026-07-21.** Options considered: rename mobile_shop's doctype (cleanest,
 frees up "Customer" for native ERPNext use later, but touches Link field
@@ -48,8 +85,11 @@ Do not silently "fix" this later without re-raising it — it was a deliberate
 deferral, not an oversight.
 
 **Do not start without explicit confirmation** (open questions, decisions pending):
-multi-category expansion (earbuds/accessories — leaning toward ERPNext's native
-Item/Serial No system, not extending Phone), full accounting integration
+multi-category expansion (earbuds/accessories) Phase 2 onward — Phase 1
+(Item/Item Barcode reuse + Item Purchase stock-in) is done, see "Current
+state" above; Phase 2 (unified `Shop Sale` checkout mixing Phone + Item
+lines) and Phase 3 (retiring Sales Entry, updating reports) are still
+gated, full accounting integration
 (migrating custom Sales Entry/Purchase Entry to post to ERPNext's native
 Sales Invoice/Purchase Invoice/GL — a real architecture decision, not a bolt-on;
 **blocked on resolving the Customer/ERPNext-core naming collision first, see
