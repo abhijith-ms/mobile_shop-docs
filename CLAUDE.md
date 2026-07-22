@@ -107,6 +107,37 @@ each round, confirmed no residue, pre-existing user data untouched.
 **Phase 2 fully verified 2026-07-21**: user confirmed in browser as both
 Mobile Shop Staff and Admin — good on both roles. Phase 2 is closed out.
 
+**Phase 3a — Shop Sale print formats, built and functionally verified, not
+yet browser-verified** (commit 9d810e8, 2026-07-21): two new formats,
+`Shop Sale PMS Invoice` (Used-phone sales, never shows VAT) and
+`Shop Sale Standard Invoice` (New-phone/accessory sales, itemizes every
+line then Subtotal/VAT Amount/Total Charged via the same
+`frappe.db.get_value` bypass pattern as the existing Standard VAT Invoice).
+Same caveat as the existing two invoices: Frappe defaults to the
+auto-generated print unless the correct format is explicitly picked from
+the dropdown.
+
+While building this, found that `Print Format` was never listed in
+`hooks.py`'s `fixtures` — the 3 pre-existing invoice formats have only
+ever lived in the site DB since 2024, `fixtures/print_format.json` was a
+disconnected snapshot `bench migrate` never synced. Fixed (scoped fixture
+filter, same pattern as the `Custom Field`/`Custom DocPerm` fixes);
+verified via two migrates that this is insert-only for the 3 existing
+records — their content untouched, sync now real going forward.
+
+Bug caught in review before commit (user, not yet a browser test): the
+phone brand/model line only guarded against no Phone being found, not
+against an existing Phone having a blank `model` — rendered the literal
+word "None" (e.g. "Tecno None"). Same block was copy-pasted into both new
+formats. Fixed to `{{ phone.brand or '' }} {{ phone.model or '' }}` in
+both. Verified via the real print pipeline (`frappe.get_print`) as both
+Staff and Administrator against real submitted `Shop Sale` docs — correct
+VAT display per format/role, and confirmed the blank-model case no longer
+shows "None".
+
+**Still pending**: a human browser pass on Phase 3a (both formats, both
+roles).
+
 **Customer/ERPNext-core naming collision (Hard Rule 10) — explicitly deferred
 2026-07-21.** Options considered: rename mobile_shop's doctype (cleanest,
 frees up "Customer" for native ERPNext use later, but touches Link field
