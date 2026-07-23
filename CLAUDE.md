@@ -35,20 +35,74 @@ Entry with `phone_type` unset, submitted it, confirmed it was correctly
 backfilled to "Used" with correct margin/VAT/net_profit, then cleaned up
 — test entry cancelled+deleted, phone reverted to In Stock, no residue).
 
-**Next task**: three narrow items left on the POS, all human/hardware-side,
-no code known to be needed — (1) the camera-scanner path specifically on
-a real tablet/phone browser (desktop testing so far used typed/wedge
-input); (2) a quick pass as the real Staff user confirming no margin/VAT/
-profit figures appear anywhere in the POS UI; (3) one real print once the
-thermal printer physically arrives, to confirm the driver honors 80mm
-sizing (stated from the start as the one thing that can't be verified
-without hardware). Once those land: nothing else currently queued for the
-multi-category expansion plan — Phases 1, 2, 3a (code), and 3b are all
-done. One thing still outstanding, human-side,
+**Next task**: two narrow items left on the POS, both hardware-side, no
+code known to be needed — (1) the camera-scanner path specifically on a
+real tablet/phone browser (desktop testing so far used typed/wedge input);
+(2) one real print once the thermal printer physically arrives, to confirm
+the driver honors 80mm sizing (stated from the start as the one thing that
+can't be verified without hardware). The third item this used to list —
+confirming no margin/VAT/profit figures leak anywhere in the POS UI as the
+real Staff user — is now done: confirmed 2026-07-22 in a full interactive
+browser pass (see the dated entry below) covering the cart UI, both print
+formats, and every report. Once the two hardware items land: nothing else
+currently queued for the multi-category expansion plan — Phases 1, 2, 3a
+(code), and 3b are all done. One thing still outstanding, human-side,
 not code: decide whether `Sales Entry` stays visible in the workspace nav as a
 historical-only doctype or gets hidden for new-entry purposes (explicitly
 deferred design question, not urgent). Full plan at
 `~/.claude/plans/mossy-brewing-wren.md`.
+
+**Full interactive end-to-end verification pass, 2026-07-22** (no code
+changes — a dedicated live-browser QA pass across the whole app, both
+roles). Homepage tiles (14 Admin / 12 Staff, one nav check per tile type),
+all 8 POS cart scenarios (New/Used/accessory sales, every mixing-block
+combination, already-sold IMEI, insufficient stock, walk-in+phone block,
+a completed mixed sale with both print formats verified line-by-line),
+all 8 reports loading with real data as Admin and the two Admin-only ones
+hard-blocking for Staff with a genuine `PermissionError` (not a blank
+page), and a Staff-side Item Purchase submit confirming `current_stock`
+increments and `purchase_price` stays editable. One real, pre-existing,
+previously-undocumented finding: the POS's Print Receipt/Print Invoice
+buttons call `frappe.utils.print()` with `trigger_print=1`, which fires the
+native OS print dialog and blocks the tab — expected for a real print
+button, but worth knowing before ever automating this flow again (verify
+print content instead via the same `/printview` URL with
+`trigger_print=0`). No functional bugs found. Test data (2 purchased
+phones, 2 completed sales, one accessory stock bump) left in place as real
+data per explicit instruction, not cleaned up.
+
+**Customer phone search/dedup + three POS polish pieces, 2026-07-22/23**
+(commits 35be8e9, 7c389e0, 5dd6acb, 654a01e). `Customer.search_fields =
+"phone"` (every existing Customer Link field now autocompletes on phone,
+free); a POS "Search by Phone" button mirroring the existing "Search Phone
+by Brand/Model" pattern (`search_customers_by_phone()`, plain
+`frappe.get_all` — Customer has no permlevel fields to bypass); a soft,
+non-blocking duplicate-phone warning in `Customer.validate()` (deliberately
+on the document, not just the POS, so the Link field's own inline
+"+ Create a new Customer" quick-entry catches it too) — editing this
+button into `mobile_shop_pos.js` is what surfaced Hard Rule 13 (a stale
+Page-script Redis cache that survived migrate/restart/hard-refresh). A
+browse-accessories panel filling the POS's previously-empty left-column
+space, ranked by sale-frequency-then-recency (`browse_items()`, folds
+"recent/frequent" into the default sort with no separate UI needed) and
+calling `add_accessory_line()` directly — the identical path barcode
+scanning uses, never a second implementation. A brief green flash + bundled
+`frappe.utils.play_sound('click')` on a successful scan only (not on
+every `scan_ok()` message, so "Cart cleared." stays silent). A "Void
+Sale" button in the POS success banner, backed by a new
+`ShopSale.on_cancel()` (closing a real pre-existing gap — cancelling used
+to do nothing at all, leaving phones stuck "Sold" and stock permanently
+short) and `ShopSale.before_cancel()` as the actual enforcement (Admin/
+System Manager unrestricted; Staff only their own sale, only within
+`STAFF_VOID_WINDOW_MINUTES` of submission) — building this last piece
+surfaced Hard Rule 14 (verifying "Admin" against the `Administrator`
+superuser masked a missing `cancel` permission grant on the real roles)
+and a second real bug caught only by testing the actual rejection paths:
+the window check first used `self.modified`, which Frappe itself
+overwrites to *now* before `before_cancel` ever runs, so a months-old sale
+slipped through unblocked until fixed to `self._original_modified`. All
+four verified against real accounts, including a genuine non-superuser
+Admin — not just `Administrator` — per Hard Rule 14.
 
 **Multi-category expansion (accessories) — Phase 1 built, two real bugs
 found and fixed via actual Staff browser testing** (commits 131356d,
