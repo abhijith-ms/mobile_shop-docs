@@ -35,10 +35,14 @@ Entry with `phone_type` unset, submitted it, confirmed it was correctly
 backfilled to "Used" with correct margin/VAT/net_profit, then cleaned up
 — test entry cancelled+deleted, phone reverted to In Stock, no residue).
 
-**Next task**: two narrow items left on the POS, both hardware-side, no
-code known to be needed — (1) the camera-scanner path specifically on a
+**Next task**: three items. (1) A human browser pass on the intake-cancel
+work committed 2026-07-25 (see the dated entry below) — Cancel button
+present for Admin and absent for Staff on all three intake doctypes, and
+the block messages rendered as real dialogs rather than only as Python
+strings. Then two narrow POS items, both hardware-side, no
+code known to be needed — (2) the camera-scanner path specifically on a
 real tablet/phone browser (desktop testing so far used typed/wedge input);
-(2) one real print once the thermal printer physically arrives, to confirm
+(3) one real print once the thermal printer physically arrives, to confirm
 the driver honors 80mm sizing (stated from the start as the one thing that
 can't be verified without hardware). The third item this used to list —
 confirming no margin/VAT/profit figures leak anywhere in the POS UI as the
@@ -51,6 +55,100 @@ not code: decide whether `Sales Entry` stays visible in the workspace nav as a
 historical-only doctype or gets hidden for new-entry purposes (explicitly
 deferred design question, not urgent). Full plan at
 `~/.claude/plans/mossy-brewing-wren.md`.
+
+**Cancel support on all three intake doctypes — built and API-verified
+2026-07-25, browser pass still outstanding** (3 commits: 6519b96,
+cedc6a7, eb7c59f). Started from a user report of "I can't cancel a
+submitted Purchase Entry" and a request to check whether it was the same
+gap already found on Shop Sale. It was — and the diagnosis pass found it
+on all three intake doctypes at once, making the Shop Sale finding a
+*class* of bug rather than a one-off (see the expanded Hard Rule 14 and
+the new Hard Rule 16). `Purchase Entry`, `Item Purchase`, and `Phone
+Batch Purchase` all had `submit: 1` but no `cancel` key on any
+permission row, so Frappe defaulted it to 0 and nobody could cancel any
+of them; verified against real non-superuser accounts, not
+`Administrator`, which reported `cancel=True` for all three and is
+exactly what hid it.
+
+The important half was not the permission. **None of the three had any
+`on_cancel`/`before_cancel` reversal logic at all**, so granting cancel
+alone would have converted a blocked bug into reachable silent data
+corruption. Each got reversal or refusal:
+
+- **Purchase Entry** — `on_cancel` deletes the Phone its `on_submit`
+  created (clearing `phone_created` *first*, since that Link field would
+  otherwise make Frappe's own link-integrity check refuse the delete).
+  `before_cancel` hard-blocks when the unit carries history: a submitted
+  `Sales Entry` or `Phone Sale Item` on that IMEI, or any `Phone.status`
+  other than `In Stock`. Checked all three ways rather than any one:
+  status alone is resettable by hand via the unsupported "return" path,
+  and Reserved/Returned means history even with no sale behind it.
+  Worth remembering — **nothing at the framework level protects this**:
+  `Purchase Entry.phone_created` is the ONLY Link field to `Phone` in
+  the entire schema, and both `Sales Entry.imei` and `Phone Sale
+  Item.imei` are plain `Data` fields, so link integrity would happily
+  let a sold Phone be deleted. `before_cancel` is the only guard.
+  Also corrected a premise from the original report: Profit Report reads
+  `psi.margin`/`se.margin`, snapshotted onto the sale line at submit
+  time, NOT recomputed from `Phone.purchase_price` — so cancelling a
+  purchase would never retroactively move figures already in the report.
+  What it destroys is provenance and IMEI History Report (Phone-centric,
+  so a deleted Phone drops out entirely). Same conclusion, different
+  reason.
+- **Item Purchase** — `on_cancel` decrements `Item.current_stock`,
+  refusing if that would go negative. Accessory stock is fungible with
+  no per-unit identity, so "were *these* units sold?" is unanswerable;
+  `current_stock >= qty` is the only meaningful check, and what it
+  guarantees is that the shop still physically holds enough to give back.
+- **Phone Batch Purchase** — same shape against `Phone
+  Batch.untracked_qty`. Sound for a subtler reason worth recording:
+  batch units are anonymous until they sell, but `untracked_qty` only
+  ever moves down through genuine sales — once a unit sells its IMEI is
+  captured and the decrement is permanent, since cancelling a
+  batch-originated *sale* deliberately does not return it to the batch.
+  So what remains is exactly what can be handed back. Three things
+  deliberately NOT reversed, documented on the method:
+  `last_purchase_price`/`last_supplier`/`last_purchase_date` (overwritten
+  every restock, prior values stored nowhere, feed no VAT or profit
+  math), the `Phone Batch` master record even at zero (shared, may be
+  referenced by real sale rows, and empty is a normal out-of-stock
+  state), and any `Phone` already created out of the batch.
+
+Design decision worth keeping: on both stock doctypes the guard lives
+*inside* `on_cancel`'s atomic `SELECT ... FOR UPDATE` lock-check-decrement
+rather than as a check in `before_cancel` — splitting them across the two
+hooks leaves a window for a concurrent sale to drain stock in between,
+the exact race `consume_item_stock`'s `FOR UPDATE` exists to close.
+Mirrors `consume_item_stock`/`create_phone_from_batch`, not
+`process_purchase`'s bare UPDATE. Confirmed empirically rather than
+assumed: on a blocked attempt both the stock figure and `docstatus`
+were unchanged, so the throw really does roll the decrement back.
+
+`cancel` granted to `Mobile Shop Admin` and `System Manager` only, never
+`Mobile Shop Staff` — explicit user decision: these are stock-provenance
+corrections, unlike the POS's 15-minute staff void window on Shop Sale.
+
+Verified as the real non-superuser accounts (Hard Rule 14) across every
+rejection path, not just the happy ones: both real sold phones blocked
+with correct messages, Reserved-status blocked, clean cancels deleting
+the Phone / decrementing exactly, dangling-`phone_created` case cancelling
+cleanly, both boundaries on each stock doctype (`stock == qty` succeeds,
+`stock == qty-1` blocks), per-purchase reversal against a shared restocked
+batch counter, and Staff blocked outright on all three. The compound case
+is the one worth re-running if this code is ever touched: cancelling a
+batch-originated Shop Sale returns the Phone to `In Stock` but does NOT
+restore `untracked_qty`, so the purchase cancel stays correctly blocked —
+confirming the two reversal mechanisms don't double-count. Stable across
+two migrates each; no `Custom DocPerm` rows on any of the three, so Hard
+Rule 15 isn't in play.
+
+All test data cleaned up, confirmed zero residue, real data re-verified
+intact (3 Purchase Entries at docstatus 1 with phones attached, 3 Item
+Purchases, item stock 29). One disclosure: exercising the Item Purchase
+path against real data meant cancelling `IP-2026-07-00009` and restoring
+it via raw SQL — values are exactly as before, but its `modified`
+timestamp now reads 2026-07-25 and `modified_by` is the admin account.
+Phone Batch Purchase was tested on synthetic data only.
 
 **Full interactive end-to-end verification pass, 2026-07-22** (no code
 changes — a dedicated live-browser QA pass across the whole app, both
@@ -440,9 +538,10 @@ figures exactly, and the desk-form Shop Sale document underneath was
 structured correctly (one phone line, one accessory line qty 2, correct
 rolled-up totals). Desktop path (typed/wedge input) considered solid.
 
-**Small unfinished items**: the 3 items in "Next task" above (tablet
-camera-scanner path, Staff-role no-leak pass, one real print once the
-thermal printer arrives) — otherwise the POS build is considered done;
+**Small unfinished items**: the POS-related items in "Next task" above
+(tablet camera-scanner path, one real print once the thermal printer
+arrives — the Staff-role no-leak pass this used to also list is done as
+of 2026-07-22) — otherwise the POS build is considered done;
 human browser verification of Phase 3a's A4 print formats specifically
 (separate from the POS's thermal receipts, which have been
 live-confirmed).
@@ -488,6 +587,189 @@ role (Staff: 12, no Profit/VAT; Admin: 14), navigation confirmed for one
 tile of each type (DocType/Report/Page), touch-target sizing, and that a
 fresh login/`/app` visit lands on the new page while the old Workspace
 stays reachable unchanged.
+
+**Batch-received New phones (untracked IMEI stock) — built and fully
+verified 2026-07-23, including a real interactive browser pass** (plan at
+`~/.claude/plans/elegant-sniffing-perlis.md`,
+3 commits: d255caf, 554f330, de40d58). New-phone-only path alongside the
+existing per-unit Purchase Entry flow (untouched — still used for Used
+phones and for New phones bought singly): scan a box's model-level UPC,
+enter a quantity, done — no per-unit IMEI scanning until the phone actually
+sells, when staff capture the real unit's IMEI in the POS cart itself.
+Mirrors Phase 1's `Item`/`Item Purchase` shape rather than reusing `Item`
+directly (considered and rejected — `Item` has no phone-shaped attributes
+and its cost fields aren't permlevel-1 like `Phone.purchase_price` is):
+new `Phone Batch` (master, not submittable, `autoname: "field:upc"` so the
+UPC value doubles as the doctype name, `untracked_qty` mirroring
+`Item.current_stock`, `last_purchase_price` permlevel 1) and `Phone Batch
+Purchase` (submittable intake transaction mirroring `Item Purchase`'s
+shape exactly, including its convention of granting no one `cancel`).
+Name-collision check run against `apps/frappe`/`apps/erpnext` before
+building — no conflict; ERPNext's own core `Batch` doctype is a different,
+unused concept (stock-ledger lot tracking).
+
+`Phone Batch.validate()` rejects a UPC already registered as an accessory's
+`Item Barcode` — a real guard against the box-photo collision risk this
+feature was built to handle, though an explicitly accepted limitation:
+it only catches that direction, not an `Item Barcode` added *after* a
+`Phone Batch` already exists for the same value, since `pos_scan()` checks
+`Item Barcode` first. `pos_scan()` gained a third lookup branch (UPC ->
+Phone Batch) alongside its existing Item-Barcode/Phone-IMEI checks. New
+`Phone Sale Item.phone_batch` field (blank on every normal line) is how
+`ShopSale.process_phone_line()` tells a batch-originated cart line apart
+from a normal one; for a batch line, `ShopSale.create_phone_from_batch()`
+locks-checks-decrements `untracked_qty` (same `FOR UPDATE` pattern as the
+existing `consume_item_stock()`) then creates the real `Phone` record via
+`phone.insert()` — reusing `Phone.validate()`'s IMEI format/Luhn/uniqueness
+checks unchanged, the same call `PurchaseEntry.create_phone_record()`
+already makes. `get_sale_scheme()`/`validate_no_pms_standard_mix()` both
+had to learn to treat a `phone_batch`-tagged row as New/Standard without a
+DB lookup, since no Phone record exists for it yet at `validate()` time —
+a real gap caught before it could ship, not found by testing.
+
+No changes needed to any of the 8 existing reports: once sold, a
+batch-originated unit is a completely normal `Phone` + `Phone Sale Item`
+row, indistinguishable from a Purchase-Entry-sourced one. Confirmed
+directly — a real batch sale showed up correctly in IMEI History Report
+with zero code changes.
+
+Live-DB investigation before building turned up a real finding worth
+remembering: the UPC from the actual box photo driving this feature
+(8906129030572) already exists in this database as an `Item` named
+"Redmi note 10" — but it's not idle stray test data as originally assumed;
+it has 3 real submitted `Item Purchase` documents and 6 real `Shop Sale`
+documents against it. Decision: leave it alone entirely (confirmed with
+the user, not a unilateral call) — it has no `Item Barcode` row so it
+doesn't functionally collide with `pos_scan()` today, and deleting/renaming
+it would have broken those real Link references. `Phone Batch` will still
+be named `"8906129030572"` in its own doctype namespace, a human-readable
+overlap accepted as a known quirk, not a hard conflict.
+
+Verified end-to-end as the real Mobile Shop Staff account
+(`clashams4@gmail.com`, not `Administrator` — Hard Rule 14), including two
+transactional edge cases the plan specifically called for, tested via real
+HTTP requests rather than bench console (a bench console session doesn't
+share a request's commit/rollback wrapper, confirmed empirically — test
+data written via console with no explicit `frappe.db.commit()` silently
+never persisted across sessions): (1) cancelling a batch-originated sale
+restores the Phone to "In Stock" and leaves `untracked_qty` untouched — the
+unit stays permanently tracked once its IMEI is captured, never returned to
+the anonymous batch count, confirmed by design decision rather than
+accident; (2) a duplicate IMEI submitted via a real HTTP POST fails inside
+`Phone.validate()`'s existing uniqueness check, which runs *after* the
+batch's atomic decrement within the same request — confirmed the whole
+transaction rolls back (`untracked_qty` unchanged, no orphaned draft `Shop
+Sale` left behind), the single most likely real-world failure mode (a
+mistyped IMEI at the till) proven safe rather than assumed safe.
+
+All of the above was exercised through the real Python API layer
+(`pos_scan`/`create_pos_sale`/`void_pos_sale`, called directly and via
+actual HTTP requests) and the real permission/field-redaction code paths —
+not code review, not a dry run.
+
+**Interactive browser pass, 2026-07-23**, logged in as the real
+`clashams4@gmail.com` session already open in the browser (confirmed via
+`/app/user-profile` before touching anything, not assumed): created and
+submitted a real `Phone Batch Purchase` through the actual desk form
+(UPC/brand/model/storage/color/qty/supplier/price, BHD 3-decimal precision
+confirmed in the rendered field), confirmed the `Phone Batch` back-reference
+field populated. In the POS: scanned the UPC, got the exact designed cart
+line (PHONE badge, "from batch · New", IMEI input with placeholder, camera
+button, the orange no-lookup-exists warning); picked a named customer via
+the phone-search autocomplete; entered a unit IMEI and price; completed the
+sale — real green success banner, Print Receipt/Print Invoice/Void Sale
+buttons rendered. Verified the receipt via `/printview?...&trigger_print=0`
+(never clicked the actual print buttons — they call `frappe.utils.print()`
+with `trigger_print=1`, which blocks the tab, a known pitfall from the
+original POS build) — correct brand/model/IMEI/VAT math, no "None" bugs.
+Clicked the real Void Sale button (a `frappe.confirm` modal, not a native
+dialog, safe to click) and confirmed server-side the Phone returned to "In
+Stock" with `untracked_qty` untouched, matching the API-level test exactly.
+Also drove three client-side guards live: scanning the same UPC past
+remaining stock produced the exact "Only N unit(s) ... are in untracked
+stock" message; completing with a walk-in customer produced the phone-needs-
+named-customer block; completing with prices set but IMEIs blank produced
+"Enter or scan the unit IMEI for every phone" (price-before-IMEI check order
+confirmed by triggering the price message first, then clearing it). Clicked
+the per-line camera scan button itself - correctly opened the scanner and
+fell back to a clean "Camera Unavailable" message (no real camera in this
+environment), no JS crash; console showed only the pre-existing, expected
+`imei_scanner.js` diagnostic logging for that fallback path, nothing from
+the new batch code. All test data (the Phone Batch Purchase, Phone Batch,
+and every test Phone record) cleaned up afterward, confirmed gone.
+
+**Homepage tiles for Item Purchase/Phone Batch Purchase/Item/Phone Batch —
+added and verified 2026-07-23** (commit ba57cee). The four doctypes built
+for the batch-phones feature and Phase 1's accessories had no launcher
+tile — same class of gap as the earlier Workspace shortcut drift. Added to
+`TILE_SECTIONS` in `mobile_shop/utils/home_tiles.py`: Item Purchase and
+Phone Batch Purchase under Daily Tasks, Item and Phone Batch under
+Records. No new visibility logic needed — `can_see_shortcut()`'s existing
+`frappe.has_permission()` check already gates all four correctly once the
+underlying doctype permissions are right.
+
+**Found and fixed a real, previously-undocumented permission bug while
+verifying the new Item tile against a real non-superuser admin account
+(Hard Rule 14 discipline, not `Administrator`)**: Frappe treats *any*
+`Custom DocPerm` row on a doctype as a **complete override** of that
+doctype's permissions, not an addition to the standard ones. The single
+`Mobile Shop Staff` read-only `Custom DocPerm` row added for `Item` back
+in Phase 1 had silently wiped out all of core ERPNext's standard `Item`
+permissions (Item Manager, Stock Manager, Stock User, Sales User, Purchase
+User, Maintenance User, Accounts User, Manufacturing User) for every other
+role, site-wide — invisible until now because every prior "Admin" check in
+this project's history used either `Administrator` (bypasses all
+permission checks) or `Mobile Shop Staff` (the one role that still
+worked). Confirmed empirically before touching anything: live DB had
+exactly one `Custom DocPerm` row on Item; `get_valid_perms('Item',
+user=<real admin>)` returned nothing at permlevel 0 despite that account
+holding "Item Manager" and several other roles core ERPNext's own
+`item.json` grants read to.
+
+**Fix**: re-declared all 8 original roles as `Custom DocPerm` rows (exact
+field values copied from `erpnext/stock/doctype/item/item.json`, not
+guessed) plus explicit `Mobile Shop Admin`/`System Manager` rows with full
+CRUD, matching the admin-tier pattern every other mobile_shop-owned
+doctype already uses. Widened the Item `Custom DocPerm` fixture filter in
+`hooks.py` from role-scoped (`role = Mobile Shop Staff`) to parent-scoped
+(`parent = Item`) so all 11 rows stay fixture-tracked going forward, not
+just the one that caused this. Regenerated `fixtures/custom_docperm.json`
+via `bench export-fixtures`, confirmed stable across two migrates.
+
+**This is now a new hard rule worth remembering — see Hard Rule 15**:
+adding a `Custom DocPerm` row for one role on a core doctype silently
+disables every other role's standard access to that doctype. Always check
+whether the target doctype already has *any* `Custom DocPerm` rows before
+adding one, and if it doesn't yet, be prepared to re-declare the full
+original role set, not just the one role being added.
+
+**Swept for the same failure mode elsewhere**, per explicit instruction:
+`Supplier` is the only other core doctype this app has `Custom DocPerm`
+rows for. Checked and confirmed healthy — its existing 8 rows (Accounts
+Manager, Accounts User, Mobile Shop Staff, Purchase Manager, Purchase
+Master Manager, Purchase User, Stock Manager, Stock User) already cover
+the full role set a real admin account needs; `has_permission` verified
+`True` for both read and write against the real admin account. (Separately
+noted but not touched, since it's not the same problem: Supplier's rows
+aren't fixture-tracked in `hooks.py` at all, unlike Item's — a
+pre-existing, already-documented distinction from the original Phase 1
+work, not a new finding.)
+
+**Verified via the real API for both real accounts** (`clashams4@gmail.com`
+/ Mobile Shop Staff, `abhijithms.9526@gmail.com` / System Manager — not
+`Administrator`): correct tile lists for both roles (`get_homepage_tiles()`
+called directly as each user), Item/Phone Batch read-only for Staff vs full
+CRUD for Admin (`has_permission` checked explicitly for read/write/create),
+stable across two migrates. **Browser click-through**: Staff verified via
+the already-logged-in session — all four tiles navigate correctly, correct
+icons/colors, `+ Add` button present on Item Purchase/Phone Batch Purchase
+and correctly absent on Item/Phone Batch. Admin verified via `Administrator`
+for the UI-rendering side only (permission correctness already proven
+separately at the API layer against the real account, per the project's own
+carve-out for non-permission UI checks) — all four tiles present, `+ Add`
+button correctly present on Item/Phone Batch this time. No new console
+errors from either pass (only the pre-existing, expected camera-unavailable
+diagnostic logging from the earlier batch-phones session).
 
 **Customer/ERPNext-core naming collision (Hard Rule 10) — explicitly deferred
 2026-07-21.** Options considered: rename mobile_shop's doctype (cleanest,
@@ -682,6 +964,73 @@ ERPNext's Customer.
     testing (data correctness, UI rendering, business logic) where its
     bypass doesn't matter.
 
+    **Update 2026-07-25 — this was never a one-off.** A user report of
+    "I can't cancel a submitted Purchase Entry" prompted checking whether
+    the same gap existed elsewhere. It did, on every other submittable
+    doctype in the app: `Purchase Entry`, `Item Purchase`, and `Phone
+    Batch Purchase` ALL had `submit: 1` and no `cancel` key at all. Shop
+    Sale was simply the first one anybody happened to try to cancel. Four
+    instances of the identical mistake, all written at different times,
+    all invisible for the same reason. The generalisable lesson: **when a
+    permission-shaped bug is found on one doctype, sweep every sibling
+    doctype for it immediately** — the same instinct that Hard Rule 15's
+    `Custom DocPerm` sweep came from. A one-line audit catches it:
+    `[(d, frappe.get_meta(d).is_submittable, frappe.get_all("DocPerm",
+    filters={"parent": d}, fields=["role","submit","cancel"]))
+    for d in <app doctypes>]`.
+
+15. **Adding a single `Custom DocPerm` row for one role on a core doctype
+    silently disables every other role's *standard* access to that
+    doctype.** Frappe treats the mere existence of any `Custom DocPerm` row
+    for a doctype as "this doctype's permissions are now fully custom" —
+    the doctype's normal DocPerm rows (whatever core ships, e.g. Item
+    Manager/Stock Manager/etc. on `Item`) stop being consulted at all, for
+    every role, not just the one the new row names. Discovered when adding
+    a homepage tile for `Item`: Phase 1 had added one `Custom DocPerm` row
+    granting `Mobile Shop Staff` read-only access, which (invisibly, since
+    every later check used either `Administrator` or `Mobile Shop Staff`
+    itself) had wiped out core ERPNext's own standard Item permissions for
+    every other role site-wide. Confirmed via Frappe's own source
+    (`get_valid_perms` in `permissions.py`): once a doctype has any custom
+    perms, only custom perms are returned — the standard ones are never
+    merged in. **Before adding a `Custom DocPerm` row for a core doctype
+    this app doesn't already have one for, check whether it already has
+    *any* `Custom DocPerm` rows** (`frappe.get_all("Custom DocPerm",
+    filters={"parent": doctype})`). If it doesn't yet, and other roles
+    need standard access preserved, re-declare the full original role set
+    as `Custom DocPerm` rows (copy exact values from the core app's own
+    `<doctype>.json`), not just the one role being added.
+
+16. **Never grant a missing `cancel` permission without first checking
+    whether the doctype has `on_cancel` reversal logic — granting it alone
+    turns a blocked bug into reachable silent data corruption.** When the
+    intake-cancel work (2026-07-25) found `cancel` missing on all three
+    intake doctypes, the obvious fix was to add the permission. That would
+    have been actively worse than the bug. Every one of them mutates state
+    *outside itself* on submit — `Purchase Entry` creates a `Phone`,
+    `Item Purchase` increments `Item.current_stock`, `Phone Batch Purchase`
+    increments `Phone Batch.untracked_qty` — and not one had any
+    `on_cancel`/`before_cancel`. The permission being 0 was the only thing
+    preventing orphaned Phone records and permanently overstated stock. So:
+    **for any submittable doctype, `on_submit` side effects and `cancel`
+    permission are one decision, never two.** Before granting cancel, ask
+    what `on_submit` touched and answer for each: reverse it, or hard-block
+    the cancel when reversing would destroy something. And prefer a hard
+    block over a clever partial reversal when the record carries history —
+    a purchase whose phone has been sold should refuse to cancel, not try
+    to unwind a sale. Two corollaries learned the same day:
+    - Put the guard *inside* the same atomic `SELECT ... FOR UPDATE` block
+      as the decrement, not in `before_cancel` with the decrement in
+      `on_cancel` — split across the two hooks leaves a window for a
+      concurrent sale to drain stock in between. Throwing from `on_cancel`
+      aborts the whole cancel and rolls the decrement back (verified: on a
+      blocked attempt both the stock figure and `docstatus` were unchanged).
+    - Frappe's link-integrity check will refuse to delete a record another
+      doc still Links to, so clear the referring field *before* the delete
+      — but do not rely on that check as a safety net. It only sees real
+      `Link` fields, and this app's sale rows reference phones through
+      plain `Data` IMEI fields, which it cannot see at all.
+
 ## Verification discipline — do not skip this
 
 After any migrate, DO NOT assume a fix worked just because the command
@@ -865,6 +1214,25 @@ just not yet started. See "Open items" above for current status of each.
 - Start dev server: `bench start` (must be running in its own terminal)
 - Migrate: `bench --site mobileshop.local migrate`
 - Console: `bench --site mobileshop.local console`
+- **Do not pipe a multi-statement script into `bench console` via stdin.**
+  It goes to IPython, which executes the input line-by-line as separate
+  cells: nested function bodies get dedented and run at top level, and
+  variables defined in one statement are missing from the next. The
+  failure mode is deceptive — you get a wall of `NameError`s that look
+  like genuine test failures on code that is actually fine (this cost two
+  full test runs during the 2026-07-25 intake-cancel work before the cause
+  was spotted). Wrapping everything in a single `def main(): ...` does NOT
+  help; the indentation is already lost by then. For anything beyond a
+  few flat statements, run a real script against the bench's own
+  interpreter instead:
+  ```
+  cd ~/Documents/Work/mobile_shop/frappe-bench/sites
+  ../env/bin/python myscript.py      # script does frappe.init(site=...)
+                                     # + frappe.connect() ... frappe.destroy()
+  ```
+  Same caveat as a bench console session applies either way: neither
+  shares a real request's commit/rollback wrapper, so test data written
+  without an explicit `frappe.db.commit()` silently never persists.
 - Two git repos exist: this inner one (`apps/mobile_shop/`) is the one that
   matters and has real commit history. An outer repo at
   `~/Documents/Work/mobile_shop/` is mostly unused — don't worry about it.
