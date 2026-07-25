@@ -35,11 +35,22 @@ Entry with `phone_type` unset, submitted it, confirmed it was correctly
 backfilled to "Used" with correct margin/VAT/net_profit, then cleaned up
 — test entry cancelled+deleted, phone reverted to In Stock, no residue).
 
+**The database is intentionally empty as of 2026-07-25.** A full
+test-data wipe (see the dated entry below) cleared every transaction and
+master record — Phones, Items, Customers, Suppliers, all sale and
+purchase documents — ahead of a full end-to-end test scenario run from
+the shared test document. Only `Walk-in Customer` was re-seeded. If a
+report, the POS, or the homepage looks broken because nothing is there,
+that is expected state, not a regression; restore
+`20260725_094524-mobileshop_local-database.sql.gz` if the pre-wipe data
+is ever needed back.
+
 **Next task**: three items. (1) A human browser pass on the intake-cancel
 work committed 2026-07-25 (see the dated entry below) — Cancel button
 present for Admin and absent for Staff on all three intake doctypes, and
 the block messages rendered as real dialogs rather than only as Python
-strings. Then two narrow POS items, both hardware-side, no
+strings. This pairs naturally with the end-to-end test scenario the wipe
+was done for. Then two narrow POS items, both hardware-side, no
 code known to be needed — (2) the camera-scanner path specifically on a
 real tablet/phone browser (desktop testing so far used typed/wedge input);
 (3) one real print once the thermal printer physically arrives, to confirm
@@ -55,6 +66,60 @@ not code: decide whether `Sales Entry` stays visible in the workspace nav as a
 historical-only doctype or gets hidden for new-entry purposes (explicitly
 deferred design question, not urgent). Full plan at
 `~/.claude/plans/mossy-brewing-wren.md`.
+
+**Full test-data wipe, 2026-07-25** (no code changes — a database
+operation, done on explicit instruction ahead of a full end-to-end test
+scenario run from the shared test document). Run through a script rather
+than the desk UI specifically *because* of the intake-cancel work
+committed the same day: bulk-cancelling old test data through the UI
+would now correctly hit the new `before_cancel` blocks wherever a phone
+or stock item had already been touched by a sale. The fix working as
+designed is what made the UI route unusable for a bulk teardown, which
+is worth anticipating next time a mass cleanup is needed.
+
+`bench --site mobileshop.local backup` first, and confirmed genuinely
+restorable before deleting anything — not just trusting the "successfully
+completed" line: `gzip -t` passed and the archive was checked for the
+real `CREATE TABLE`/`INSERT` content
+(`20260725_094524-mobileshop_local-database.sql.gz`, 1.0M).
+
+Deleted, in dependency order (transactions before the masters they
+reference), all confirmed 0 afterwards by raw SQL `COUNT(*)` in a fresh
+connection rather than the wipe script's own reporting: Shop Sale (14),
+Sales Entry (2), Purchase Entry (2), Item Purchase (3), Phone Batch
+Purchase (0), Phone Batch (0), Phone (2), Item Barcode (1), Item (1),
+Customer (3), Supplier (1). Child rows went with their parents — `Phone
+Sale Item` 12→0, `Item Sale Line` 6→0, no orphans. Submitted documents
+had to be dropped to `docstatus = 2` via SQL first, since Frappe won't
+delete a submitted doc; `force=True` on `delete_doc` skipped the
+linked-document check, which is correct here only because the whole
+reference graph was being removed together.
+
+Two things worth remembering:
+
+- **One record was deleted that wasn't on the list**: a single `Item
+  Price` row (Standard Buying, 150.0). ERPNext auto-creates it from
+  `Item.standard_rate`, and it would have blocked the `Item` delete and
+  otherwise been left orphaned. Any future Item teardown needs the same
+  step. Disclosed at the time, recoverable from the backup.
+- **The Item `8906129030572` is gone**, superseding the explicit
+  leave-it-alone decision recorded in the batch-phones section above —
+  see the note appended there.
+
+Explicitly untouched, verified by before/after counts: User 4, Role 51,
+Custom Field 3, Custom DocPerm 19, Print Format 27, Workspace 24, Page
+17, Report 197, Number Card 29 — all identical.
+
+`Walk-in Customer` re-seeded afterwards (the POS needs it for
+accessory-only sales), reproducing the deleted record's field values
+captured beforehand rather than guessed — every other field on it was
+blank. Verified at both layers: `is_walk_in` reads 1 through the ORM and
+1 as the raw column value, and it is the only Customer in the database.
+
+Cache cleared and bench restarted. Smoke-checked that the app behaves
+correctly against an empty DB rather than assuming: `pos_scan()` on the
+just-deleted barcode returns a clean `{"type": "not_found"}` instead of
+erroring.
 
 **Cancel support on all three intake doctypes — built and API-verified
 2026-07-25, browser pass still outstanding** (3 commits: 6519b96,
@@ -148,7 +213,10 @@ Purchases, item stock 29). One disclosure: exercising the Item Purchase
 path against real data meant cancelling `IP-2026-07-00009` and restoring
 it via raw SQL — values are exactly as before, but its `modified`
 timestamp now reads 2026-07-25 and `modified_by` is the admin account.
-Phone Batch Purchase was tested on synthetic data only.
+Phone Batch Purchase was tested on synthetic data only. (Both the data
+described here and that lingering timestamp were removed hours later by
+the full wipe above — the paragraph records what was verified at the
+time, not current state.)
 
 **Full interactive end-to-end verification pass, 2026-07-22** (no code
 changes — a dedicated live-browser QA pass across the whole app, both
@@ -167,7 +235,8 @@ button, but worth knowing before ever automating this flow again (verify
 print content instead via the same `/printview` URL with
 `trigger_print=0`). No functional bugs found. Test data (2 purchased
 phones, 2 completed sales, one accessory stock bump) left in place as real
-data per explicit instruction, not cleaned up.
+data per explicit instruction, not cleaned up — subsequently removed by
+the full wipe of 2026-07-25.
 
 **Customer phone search/dedup + three POS polish pieces, 2026-07-22/23**
 (commits 35be8e9, 7c389e0, 5dd6acb, 654a01e). `Customer.search_fields =
@@ -644,6 +713,18 @@ doesn't functionally collide with `pos_scan()` today, and deleting/renaming
 it would have broken those real Link references. `Phone Batch` will still
 be named `"8906129030572"` in its own doctype namespace, a human-readable
 overlap accepted as a known quirk, not a hard conflict.
+
+**Superseded 2026-07-25 — that Item no longer exists.** The
+leave-it-alone decision above held only as long as those Link references
+did. The full test-data wipe (see the dated entry below) deleted the
+`Item Purchase` and `Shop Sale` documents that made deleting it risky,
+and the Item itself along with them, on explicit instruction naming it as
+stray test data to clear. The paragraph above is kept for the reasoning,
+not as a description of current state: there is now no `Item` named
+`8906129030572`, so the human-readable overlap with a future `Phone
+Batch` of the same name is gone too. Nothing about the UPC-collision
+guard in `Phone Batch.validate()` changes — it checks `Item Barcode`
+rows, and that Item's barcode was `8888888888`, never the UPC itself.
 
 Verified end-to-end as the real Mobile Shop Staff account
 (`clashams4@gmail.com`, not `Administrator` — Hard Rule 14), including two
