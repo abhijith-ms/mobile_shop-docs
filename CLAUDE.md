@@ -45,27 +45,166 @@ that is expected state, not a regression; restore
 `20260725_094524-mobileshop_local-database.sql.gz` if the pre-wipe data
 is ever needed back.
 
-**Next task**: three items. (1) A human browser pass on the intake-cancel
-work committed 2026-07-25 (see the dated entry below) — Cancel button
-present for Admin and absent for Staff on all three intake doctypes, and
-the block messages rendered as real dialogs rather than only as Python
-strings. This pairs naturally with the end-to-end test scenario the wipe
-was done for. Then two narrow POS items, both hardware-side, no
-code known to be needed — (2) the camera-scanner path specifically on a
-real tablet/phone browser (desktop testing so far used typed/wedge input);
-(3) one real print once the thermal printer physically arrives, to confirm
-the driver honors 80mm sizing (stated from the start as the one thing that
-can't be verified without hardware). The third item this used to list —
-confirming no margin/VAT/profit figures leak anywhere in the POS UI as the
-real Staff user — is now done: confirmed 2026-07-22 in a full interactive
-browser pass (see the dated entry below) covering the cart UI, both print
-formats, and every report. Once the two hardware items land: nothing else
-currently queued for the multi-category expansion plan — Phases 1, 2, 3a
-(code), and 3b are all done. One thing still outstanding, human-side,
-not code: decide whether `Sales Entry` stays visible in the workspace nav as a
-historical-only doctype or gets hidden for new-entry purposes (explicitly
-deferred design question, not urgent). Full plan at
-`~/.claude/plans/mossy-brewing-wren.md`.
+**Next task**: (1) A human browser pass on the **Purchase Voucher** work
+committed 2026-07-28 (see that section below) — the `+ Add Line` dialog,
+the per-row IMEI capture dialog with its live "5 / 10" counter and camera
+button, the per-line VAT Treatment columns in both grids, a real mixed
+voucher submit, and a real cancel with its block message rendered as an
+actual dialog. Also (2) a human pass on the intake-cancel work committed
+2026-07-25 — Cancel present for Admin and absent for Staff on all three
+older intake doctypes. Then two hardware-side POS items, no code known to
+be needed — (3) the camera-scanner path on a real tablet/phone browser
+(desktop testing so far used typed/wedge input); (4) one real print once
+the thermal printer arrives, to confirm 80mm sizing (stated from the start
+as the one thing that can't be verified without hardware).
+
+Two questions are open **for the accountant**, both recorded in the
+Purchase Voucher section: what `Phone.purchase_price` should store on a
+VAT-exclusive line (currently stored exactly as entered), and whether a
+voucher mixing Used and standard-VAT lines should harden from a warning
+into a hard block.
+
+One follow-up phase is deliberately **not** started: `Purchase Report`
+and `Supplier Report` read only `Purchase Entry`, so they go empty for
+data entered through Purchase Voucher. Needs the same report-by-report
+discipline Phase 3b used — one at a time, real baseline first — not a
+batch.
+
+The old "does `Sales Entry` stay in the workspace nav" question is now
+**answered** (2026-07-28): it, `Purchase Entry`, `Item Purchase` and
+`Phone Batch Purchase` all moved to a "Historical" section on the
+homepage launcher — visible and fully functional, just no longer in
+Daily Tasks. Full plans at `~/.claude/plans/mossy-brewing-wren.md` and
+`~/.claude/plans/new-feature-scoping-for-immutable-puppy.md`.
+
+**Unified `Purchase Voucher` intake — built 2026-07-28, browser pass
+outstanding** (11 commits, `cf2fe7f`..`e1cc0d7`; plan at
+`~/.claude/plans/new-feature-scoping-for-immutable-puppy.md`). Direct
+client request from a real meeting: intake split across three doctypes
+felt fragmented, and one supplier delivery of "10 phones + 10 earphones
++ 15 cases" needed three documents under three numbering series. Now one
+submittable parent (`Purchase Voucher`, naming `PV-.#####` → `PV-00001`,
+plain sequential per the client's "p1, p2, p3") with two typed child
+tables, `Purchase Voucher Phone Line` and `Purchase Voucher Accessory
+Line` — Shop Sale's proven shape, not a new design.
+
+**IMEI capture is optional per unit.** Whatever staff scan becomes a real
+tracked `Phone`; the remainder becomes untracked `Phone Batch` quantity,
+identified at the till by the existing `pos_scan()` → Shop Sale flow.
+Two hard blocks guard that split, both compliance-driven rather than
+arbitrary: a **Used** line must be fully captured (Phone Batch has no
+`phone_type` and is New-only by construction — `get_sale_scheme()` and
+`validate_no_pms_standard_mix()` both treat a batch row as New/Standard
+*without a lookup*, so an untracked Used unit would sell under standard
+VAT instead of the margin scheme); and any remainder **requires the box
+UPC**, because untracked units are reachable only through `pos_scan()`'s
+UPC lookup — a batch with no scannable UPC is permanently unsellable
+stock, so the rule is what makes the remainder usable at all.
+
+**Hard rule 17 territory — VAT treatment is PER LINE here, and that is
+deliberate.** The first scoping had a document-level `vat_treatment`
+mirroring `Shop Sale`, flagged as an assumption. Real accountant feedback
+settled it the other way: one distributor invoice can legitimately price
+some lines VAT-inclusive and others exclusive. So `vat_treatment` lives
+on **both child tables and nowhere else**. **Do not "fix" this into
+consistency with Shop Sale's document-level field** — the asymmetry is
+the requirement. There is also deliberately **no** `default_vat_treatment`
+convenience field on the parent: an earlier draft had one and it was
+dropped, because a stored parent value is something a later report or a
+careless `frappe.db.get_value` could mistake for authoritative. The
+keystroke-saving pre-fill is pure JS session state in
+`public/js/purchase_voucher.js`, keyed to the current document so it
+cannot leak across vouchers. A proposal to add such a field back is a
+re-litigation, not a new idea.
+
+Per-line `net_amount`/`vat_amount`/`amount` are computed by the **shared**
+`calculate_standard_vat()` in `mobile_shop/utils/vat.py` — called, never
+modified (its second return value is named `net_profit` for its sale-side
+caller; on the purchase side the same number is the net cost). A Used
+line takes an explicit branch that never calls it at all. Two rounding
+decisions, both found by testing and both worth keeping: round **per
+line** rather than once at the end (an Inclusive line divides by 11 and
+the float tails made displayed lines not add up to the displayed total),
+and round only **two** of net/VAT/gross and derive the third, so
+`net + VAT == gross` holds exactly — rounding all three independently
+produced a visible 3-fils discrepancy across 35 lines. Which figure is
+authoritative follows the treatment: Exclusive means the entered price is
+net, Inclusive means it already includes VAT.
+
+`before_cancel`/`on_cancel` shipped **in the same feature**, per Hard
+Rule 16 — not added afterwards the way all three older intake doctypes
+needed. `before_cancel` reuses `PurchaseEntry.get_cancel_block_reason`
+verbatim so both intake paths refuse on identical conditions; both stock
+decrements sit inside a single `SELECT … FOR UPDATE` lock-check-decrement
+rather than split across the two hooks. Note `phones_created` is a
+`Small Text` (one line can create many phones), so **Frappe's
+link-integrity check cannot see those references at all** — same blind
+spot as `Sales Entry.imei`; `before_cancel` is the only guard.
+
+`cancel` granted to `Mobile Shop Admin` and `System Manager` only, never
+Staff — matching the 2026-07-25 decision that intake reversals are
+stock-provenance corrections.
+
+**No report changes were needed**, and that was verified rather than
+assumed: a Phone created here is byte-identical in shape to one from
+`Purchase Entry`, and `pos_scan()` resolves both a new tracked IMEI and a
+new batch UPC with zero code changes. **But** `Purchase Report` and
+`Supplier Report` read `Purchase Entry` exclusively, so they will go
+empty for new data — a real gap, deliberately left to its own phase.
+
+Two new print formats (`Self-Billed Purchase Voucher Invoice`,
+`Purchase Voucher Summary`). The self-billed one renders **Used lines
+only** — that is what makes allowing mixed vouchers correct rather than
+merely asserted — says so explicitly when the voucher also holds
+distributor stock, and renders a short explanation instead of a blank
+signature line when there are no Used lines at all.
+
+Three deliberate consequences to remember: `Phone.model` is **blank** for
+everything created this way (the client asked for brand and model folded
+into one free-text field), so Inventory/Sales Report's Model column is
+empty for new stock and Sales Report's Model filter will not match it;
+`Phone Batch.model` was relaxed to optional for the same reason;
+and `Phone.purchase_price` stores the price **exactly as entered**, not
+grossed up on an Exclusive line — open for the accountant, but it only
+feeds the PMS margin for Used phones, which carry no `vat_treatment` at
+all.
+
+Verified against the real non-superuser accounts throughout — Staff
+`clashams4@gmail.com`, and a **new** `Mobile Shop Admin`-only account
+(see Hard Rule 14's update below). Every rejection path was exercised,
+not just the happy ones; the two that matter most are that a blocked
+batch cancel leaves `untracked_qty` **and** `docstatus` unchanged
+(proving the throw rolls the decrement back), and the compound case where
+cancelling a batch-originated Shop Sale returns the Phone to In Stock but
+does **not** restore `untracked_qty`, so the voucher cancel stays
+correctly blocked and the two reversal mechanisms never double-count.
+The client's own case — 10 phones + 10 earphones + 15 cases on one
+voucher — was submitted end to end through the ordinary permission path
+as the real Staff account.
+
+**Three pre-existing bugs found while doing this, all unrelated to the
+feature**, plus one worth knowing:
+
+- **`Mobile Shop Admin` had zero permission on `Supplier`** — see Hard
+  Rule 14's update. Fixed in `cf2fe7f`.
+- **A dangling `User Permission`** restricting Staff to `Supplier = "Ali"`,
+  created 2026-07-07 and orphaned by the 2026-07-25 wipe, which deleted
+  every Supplier. Staff could therefore read or print **no** supplier-linked
+  document at all. Proved by construction (with a supplier named "Ali",
+  Staff read/print `True`; with any other, `False`). Swept the whole site
+  — it was the only `User Permission` row — and deleted it. **The wipe's
+  own "explicitly untouched" audit never covered `User Permission`;
+  include it next time.**
+- **`bench export-fixtures` silently loses rows when two `fixtures`
+  entries name the same doctype.** Both write `fixtures/<doctype>.json`
+  and the second overwrites the first — a two-entry version dropped all
+  11 `Item` `Custom DocPerm` rows. Use ONE entry with an `in` filter:
+  `[["parent", "in", ["Item", "Supplier"]]]`.
+- **The homepage launcher's tile-rendering JS exists only in the site
+  database.** It is a `Custom HTML Block` record, and `hooks.py` tracks
+  only Custom Field / Custom DocPerm / Print Format — so that script is
+  untracked by git and would be lost on a fresh install. Same drift class
+  as the workspace problem fixed in `d8c4a4b`. Not fixed; flagged.
 
 **Full test-data wipe, 2026-07-25** (no code changes — a database
 operation, done on explicit instruction ahead of a full end-to-end test
@@ -880,6 +1019,28 @@ until the above is picked up): how to resolve the Customer naming collision
 itself — rename mobile_shop's doctype vs. formally cleaning up/taking over
 ERPNext's Customer.
 
+**Added 2026-07-28, from the Purchase Voucher work** — four more, none
+urgent, none to be decided unilaterally:
+
+- **`Purchase Report` / `Supplier Report` do not see Purchase Vouchers.**
+  Both read `Purchase Entry` exclusively, so they go empty for new data.
+  Needs its own phase with Phase 3b's discipline — real baseline snapshot
+  first, one report at a time, historical rows confirmed byte-identical —
+  explicitly NOT a batch, which is the rule a rushed 4-report batch broke
+  once already.
+- **What `Phone.purchase_price` stores on a VAT-exclusive line** — as
+  entered (current behaviour) or grossed up. The accountant's call. It
+  only ever matters for New phones, since Used lines carry no
+  `vat_treatment` and it is New-phone `purchase_price` that feeds no VAT
+  or profit maths.
+- **Whether a voucher mixing Used and standard-VAT lines should hard-block
+  rather than warn.** Currently a soft `msgprint`. Becomes a one-line
+  change to `frappe.throw` if the client confirms a Supplier is always
+  either a private individual or a registered distributor, never both.
+- **Whether `Phone.model` staying blank is acceptable** for stock created
+  through Purchase Voucher, or whether Sales/Inventory Report's Model
+  column and filter should fall back to searching `brand`.
+
 ## Hard rules — these came from real bugs, don't relearn them the hard way
 
 1. **Workspace and Number Card are "standard" doctypes.** They sync from
@@ -1060,6 +1221,36 @@ ERPNext's Customer.
     filters={"parent": d}, fields=["role","submit","cancel"]))
     for d in <app doctypes>]`.
 
+    **Update 2026-07-28 — "not `Administrator`" was never sufficient on
+    its own.** This rule says to test against "a real non-superuser
+    account carrying the role in question". In practice every later pass
+    used `abhijithms.9526@gmail.com`, which holds `System Manager` — so
+    `Mobile Shop Admin`, a role named in the permissions array of nearly
+    every doctype this app owns, **had never once been exercised**,
+    because **no user held it at all**. Discovered while building
+    Purchase Voucher, by creating the first such account
+    (`msadmin.test@mobileshop.local`, that role and nothing else).
+    It immediately found a real bug: **`Mobile Shop Admin` had zero
+    permission on `Supplier`** — read, write, create and delete all
+    denied. `Supplier` carries `Custom DocPerm` rows, so per Hard Rule 15
+    its standard perms are ignored for every role, and its 8 rows named
+    `Mobile Shop Staff` plus six core ERPNext roles but neither
+    admin-tier role. Since `supplier` is a reqd Link on every intake
+    doctype, that blocked those forms **outright** for that role (see
+    PROJECT_PLAN Phase 5 bug #2 — a Link to a doctype with no grant kills
+    the whole form, not just the field). CLAUDE.md had recorded Supplier
+    as swept and healthy; that was true of the *account* used to check it
+    (which separately holds `Purchase Manager`/`Stock Manager`) and false
+    of the *role*. Fixed in `cf2fe7f`, additive only.
+    **The generalisable lesson: a role with permission rows and no
+    account holding it is untested, no matter how many non-superuser
+    passes have run. Check `frappe.get_all("Has Role", filters={"role":
+    r, "parenttype": "User"})` before believing any role has been
+    verified**, and keep `msadmin.test@mobileshop.local` around as the
+    fixture for `Mobile Shop Admin`. Its DocPerm rows were also diffed
+    against `System Manager` across all app doctypes at that point and
+    were identical — worth re-running if either is edited.
+
 15. **Adding a single `Custom DocPerm` row for one role on a core doctype
     silently disables every other role's *standard* access to that
     doctype.** Frappe treats the mere existence of any `Custom DocPerm` row
@@ -1183,9 +1374,30 @@ but it actually collides with ERPNext's core Customer doctype of the same
 name and currently overrides it. See Hard Rule 10 before assuming either
 description is accurate.)
 
-**Custom doctypes**: Phone, Customer, Purchase Entry, Sales Entry, plus 7
-Report doctypes (IMEI History, Sales, Purchase, Customer, Supplier,
-Inventory, Profit — VAT Report pending), 3 Number Cards, 1 Workspace.
+**Custom doctypes** (13, as of 2026-07-28 — this list was long out of date;
+verify with `frappe.get_all("DocType", filters={"module": "Mobile Shop"})`
+rather than trusting any prose):
+
+- Masters: `Phone`, `Customer`, `Phone Batch`
+- Sale side: `Shop Sale` + children `Phone Sale Item`, `Item Sale Line`;
+  `Sales Entry` (historical only, superseded by Shop Sale)
+- Intake: `Purchase Voucher` + children `Purchase Voucher Phone Line`,
+  `Purchase Voucher Accessory Line` — the single entry point since
+  2026-07-28; `Purchase Entry`, `Item Purchase`, `Phone Batch Purchase`
+  all still fully functional but historical-only for new entry
+
+Plus 8 Report doctypes (IMEI History, Sales, Purchase, Customer,
+Supplier, Inventory, Profit, VAT — all built), 3 Number Cards, 2
+Workspaces (`Mobile Shop`, `Mobile Shop Home`), 1 Desk Page
+(`mobile-shop-pos`), 1 Custom HTML Block (the homepage launcher — **lives
+only in the site DB, not fixture-tracked**), and 9 Print Formats.
+
+**Four intake doctypes coexist on purpose.** `Purchase Voucher` did not
+replace the older three: their documents must stay openable and
+cancellable, `Purchase Report`/`Supplier Report` still read `Purchase
+Entry`, and `Purchase Entry.phone_created` is the only real `Link` field
+to `Phone` in the entire schema. Same pattern as `Sales Entry` surviving
+`Shop Sale`.
 
 **"Mobile Shop Settings" singleton (VAT Rate, Business Name, Invoice Footer,
 Warranty Defaults) — NOT YET BUILT.** VAT rates are currently hardcoded in
