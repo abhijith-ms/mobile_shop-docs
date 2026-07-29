@@ -71,11 +71,34 @@ the new `Accessory Purchase Report`. Every purchase source is now
 reported.
 
 The old "does `Sales Entry` stay in the workspace nav" question is now
-**answered** (2026-07-28): it, `Purchase Entry`, `Item Purchase` and
-`Phone Batch Purchase` all moved to a "Historical" section on the
-homepage launcher — visible and fully functional, just no longer in
-Daily Tasks. Full plans at `~/.claude/plans/mossy-brewing-wren.md` and
-`~/.claude/plans/new-feature-scoping-for-immutable-puppy.md`.
+**answered** (2026-07-28, then superseded 2026-07-29): it, `Purchase
+Entry`, `Item Purchase` and `Phone Batch Purchase` first moved to a
+"Historical" section on the homepage launcher, and that section was then
+**removed entirely** (commit `f444ca6`) — they have **no homepage tile at
+all** now, for either role. Purchase Voucher and Shop Sale cover every
+new-entry case, and the multi-source reports already surface the older
+documents' data. Full plans at `~/.claude/plans/mossy-brewing-wren.md`
+and `~/.claude/plans/new-feature-scoping-for-immutable-puppy.md`.
+
+**Nothing about access moved, and that distinction is the point** — all
+four keep every permission row, stay searchable, stay openable from their
+List views (`+ Add` included), and stay cancellable by an admin. They
+have to: `Purchase Report`/`Supplier Report` read `Purchase Entry`
+directly, and `Purchase Entry.phone_created` is the only real `Link` to
+`Phone` in the schema. A comment sits where the section was, saying both
+"do not restore these tiles" and "do not follow this through into the
+permission rows".
+
+**Worth remembering — Hard Rule 1 does NOT apply to `home_tiles.py`.**
+The instinct to reach for `frappe.db.set_value()` + two migrates was
+right for the Workspace and the Custom HTML Block and wrong here.
+`TILE_SECTIONS` is a plain Python list in a module; the launcher block
+calls `get_homepage_tiles()` at runtime and hardcodes **no** tile labels
+or section names, so there is no DB row to drift and nothing for
+`set_value` to target. Editing the Python and restarting is the whole
+fix. Confirmed by reading the live block's script, not assumed. The
+Workspace and Custom HTML Block records needed no change at all, because
+neither one names a section.
 
 **`Accessory Purchase Report` — built and browser-verified 2026-07-29**
 (commit `8077b0d`). The counterpart to Purchase Report, closing the gap
