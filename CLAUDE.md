@@ -65,11 +65,10 @@ voucher mixing Used and standard-VAT lines should harden from a warning
 into a hard block.
 
 The report follow-up phase that used to sit here is **done** (2026-07-29,
-see that section below): `Purchase Report` and `Supplier Report` now read
-every purchase source. One known gap remains from it, accepted rather
-than overlooked: **accessory purchases appear in no report at all**, and
-would need their own report rather than blank columns on a phone-shaped
-one.
+see below): `Purchase Report` and `Supplier Report` now read every
+purchase source, and the accessory gap that phase surfaced was closed by
+the new `Accessory Purchase Report`. Every purchase source is now
+reported.
 
 The old "does `Sales Entry` stay in the workspace nav" question is now
 **answered** (2026-07-28): it, `Purchase Entry`, `Item Purchase` and
@@ -77,6 +76,33 @@ The old "does `Sales Entry` stay in the workspace nav" question is now
 homepage launcher — visible and fully functional, just no longer in
 Daily Tasks. Full plans at `~/.claude/plans/mossy-brewing-wren.md` and
 `~/.claude/plans/new-feature-scoping-for-immutable-puppy.md`.
+
+**`Accessory Purchase Report` — built and browser-verified 2026-07-29**
+(commit `8077b0d`). The counterpart to Purchase Report, closing the gap
+that report's phones-only scope deliberately left. Unions `Item Purchase`
+and `Purchase Voucher Accessory Line`; see the coverage table in the
+Architecture section for how the two reports partition the sources.
+
+**The VAT asymmetry is represented honestly rather than flattened.**
+`Item Purchase` predates per-line VAT entirely, so its `vat_treatment`,
+`net_amount` and `vat_amount` are **NULL, not zero** — zero would assert
+"no VAT was charged", which that form never recorded either way. Its
+`amount` IS populated, because `qty * price` is genuinely known. A
+message above the report explains the blanks so they read as a fact
+about the older form, not as missing data.
+
+**One inconsistency recorded rather than resolved.** This report's money
+columns are Admin-only, matching Purchase Report and Supplier Report —
+but that is deliberately *stricter than the doctype*:
+`Item Purchase.purchase_price` and `Purchase Entry.purchase_price` are
+both **permlevel 0**, so Staff enter and see the same number on the form.
+Every purchase-side report has always been stricter than the underlying
+permission. That was left alone here on the explicit ground that a new
+report should not settle a question about the existing ones.
+**Open decision: should the purchase-side reports be relaxed to match
+permlevel 0, or should those fields become permlevel 1?** Right now the
+two disagree, and whichever way it is resolved should be applied to all
+of them at once.
 
 **Purchase Report + Supplier Report extended to every purchase source —
 done and browser-verified 2026-07-29** (3 commits: `c3be0c9`, `3c27969`,
@@ -1091,10 +1117,14 @@ ERPNext's Customer.
 urgent, none to be decided unilaterally:
 
 - ~~`Purchase Report` / `Supplier Report` do not see Purchase Vouchers.~~
-  **Done 2026-07-29** — see that section above. What remains from it is a
-  decision, not a bug: **should accessory purchases be reported at all?**
-  They currently appear in no report. Purchase Report excludes them
-  deliberately (phone-shaped columns); adding them means a new report.
+  **Done 2026-07-29.** ~~Should accessory purchases be reported at all?~~
+  **Answered — `Accessory Purchase Report` built the same day.** What
+  this left behind is a genuinely open question: **the purchase-side
+  reports are all stricter than their own doctypes.** `purchase_price` is
+  permlevel 0 on `Purchase Entry` and `Item Purchase` — Staff type it on
+  the form — yet all three reports hide money from Staff. Either relax
+  the reports or raise those fields to permlevel 1, but apply whichever
+  answer to all of them at once.
 - **What `Phone.purchase_price` stores on a VAT-exclusive line** — as
   entered (current behaviour) or grossed up. The accountant's call. It
   only ever matters for New phones, since Used lines carry no
@@ -1519,8 +1549,9 @@ rather than trusting any prose):
   2026-07-28; `Purchase Entry`, `Item Purchase`, `Phone Batch Purchase`
   all still fully functional but historical-only for new entry
 
-Plus 8 Report doctypes (IMEI History, Sales, Purchase, Customer,
-Supplier, Inventory, Profit, VAT — all built), 3 Number Cards, 2
+Plus 9 Report doctypes (IMEI History, Sales, Purchase, Accessory
+Purchase, Customer, Supplier, Inventory, Profit, VAT — all built),
+3 Number Cards, 2
 Workspaces (`Mobile Shop`, `Mobile Shop Home`), 1 Desk Page
 (`mobile-shop-pos`), 1 Custom HTML Block (the homepage launcher — **lives
 only in the site DB, not fixture-tracked**), and 9 Print Formats.
@@ -1531,7 +1562,15 @@ the SQL, not this table, before relying on it):
 | Report | PE | Item Purchase | PBP | Purchase Voucher |
 |---|---|---|---|---|
 | Purchase Report | ✅ | ❌ *(deliberate)* | ✅ | ✅ phone lines only |
+| **Accessory Purchase Report** | ❌ *(deliberate)* | ✅ | ❌ | ✅ accessory lines only |
 | Supplier Report | ✅ | ✅ | ✅ | ✅ parent totals |
+
+**Purchase Report and Accessory Purchase Report partition the purchase
+sources between them** — every source is covered exactly once, and no row
+appears in both. A *mixed* Purchase Voucher does appear in each, but as
+different lines of itself, which is correct. Neither report should be
+"completed" by adding the other's sources; the split is what keeps both
+free of blank columns.
 
 `Inventory Report` reads `Phone` and so covers every source implicitly —
 a Phone is a Phone regardless of which intake created it. The five
