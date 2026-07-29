@@ -1487,6 +1487,53 @@ urgent, none to be decided unilaterally:
     `Item Price` rows auto-created from `Item.standard_rate`) by tracing them
     from the manifest rather than by listing the table.
 
+19. **`create` without `write` is not a usable permission combination — a
+    Frappe form cannot render a blank field the user is not allowed to write.**
+    On 2026-07-29, `create: 1` was granted to `Mobile Shop Staff` on `Item`
+    (and nothing else, deliberately) to unblock the inline
+    "+ Create a new Item" dialog on a Purchase Voucher accessory line. It could
+    never have worked. `frappe.perm.get_field_display_status()` consults only
+    `write` when deciding between `"Write"` and `"Read"` — **`create` is never
+    looked at** — so with read+create every field resolved to `"Read"`, and
+    Frappe then *hides outright* any Read field whose value is null. The fields
+    that rendered were exactly the ones that already had values (`item_code`,
+    `stock_uom`, the checkboxes); every blank mandatory field
+    (`item_group`, `item_name`, `description`) was simply absent. Save failed
+    with "Missing Values Required: Item Group" and there was **no field on
+    screen to fix it** — in the quick-entry dialog *and* in Edit Full Form.
+
+    The trap is that this looks like a missing permission on the *linked*
+    doctype, and chasing that produces real-looking progress: granting UOM
+    `select` genuinely did fix a separate "No permission for UOM" error and
+    made `Default Unit of Measure` prefill. It just wasn't the blocker. Two
+    dead ends were burned before the actual mechanism was found — including
+    `Stock Settings.item_group`, which does **not** feed quick-entry the way
+    `stock_uom` does (`stock_uom` is published into
+    `frappe.boot.sysdefaults`; `item_group` is not published at all).
+
+    **Diagnose this class of bug by asking the form directly, not by reading
+    DocPerm rows.** The decisive check takes one line in the browser console
+    and changes nothing:
+    ```js
+    frappe.perm.get_field_display_status(
+        frappe.meta.get_docfield(dt, fieldname, docname), doc, cur_frm.perm)
+    ```
+    Compare it against a synthetic perm array with `write: 1` added. If every
+    field flips `Read` → `Write`, the missing grant is `write`, full stop.
+
+    **The fix, when Staff must create but must not edit the master generally,
+    is an `if_owner` row** — Frappe core's own pattern, used on `Note`,
+    `Kanban Board` and `Custom HTML Block`: **two rows at the same
+    role+permlevel**, one `if_owner=0` carrying the unrestricted rights and one
+    `if_owner=1` carrying the owner-scoped ones. On `Item` that is
+    `if_owner=0: read, create` plus `if_owner=1: read, write` — Staff read
+    everything, create anything, write only their own. Note that this is
+    invisible to a doc-less permission check: `has_permission("Item", "write")`
+    with no `doc` returns `False`, correctly, so **always pass a real document
+    when verifying an `if_owner` grant**, and verify both directions (own doc
+    writable, someone else's not) with a real `.save()`, not just
+    `has_permission`.
+
 ## Verification discipline — do not skip this
 
 After any migrate, DO NOT assume a fix worked just because the command
