@@ -64,11 +64,12 @@ VAT-exclusive line (currently stored exactly as entered), and whether a
 voucher mixing Used and standard-VAT lines should harden from a warning
 into a hard block.
 
-One follow-up phase is deliberately **not** started: `Purchase Report`
-and `Supplier Report` read only `Purchase Entry`, so they go empty for
-data entered through Purchase Voucher. Needs the same report-by-report
-discipline Phase 3b used — one at a time, real baseline first — not a
-batch.
+The report follow-up phase that used to sit here is **done** (2026-07-29,
+see that section below): `Purchase Report` and `Supplier Report` now read
+every purchase source. One known gap remains from it, accepted rather
+than overlooked: **accessory purchases appear in no report at all**, and
+would need their own report rather than blank columns on a phone-shaped
+one.
 
 The old "does `Sales Entry` stay in the workspace nav" question is now
 **answered** (2026-07-28): it, `Purchase Entry`, `Item Purchase` and
@@ -76,6 +77,73 @@ The old "does `Sales Entry` stay in the workspace nav" question is now
 homepage launcher — visible and fully functional, just no longer in
 Daily Tasks. Full plans at `~/.claude/plans/mossy-brewing-wren.md` and
 `~/.claude/plans/new-feature-scoping-for-immutable-puppy.md`.
+
+**Purchase Report + Supplier Report extended to every purchase source —
+done and browser-verified 2026-07-29** (3 commits: `c3be0c9`, `3c27969`,
+`4708147`; plan at
+`~/.claude/plans/purchase-and-supplier-report-multi-source.md`). Closes
+the gap flagged when Purchase Voucher shipped. The audit found it was
+wider than expected: **neither report had ever included `Item Purchase`
+or `Phone Batch Purchase`**, so those gaps long predate Purchase
+Voucher.
+
+**Two deliberate asymmetries between the two reports — do NOT "fix"
+either to match the other.** Both are commented in their own files:
+
+- **Purchase Report is phones only.** It UNIONs `Purchase Entry`,
+  `Phone Batch Purchase` and `Purchase Voucher Phone Line`, and
+  *structurally omits* `Item Purchase` and `Purchase Voucher Accessory
+  Line` — the same technique Profit Report uses to keep `Item Sale Line`
+  out, so it cannot be got wrong later by editing a filter. Its columns
+  are phone-shaped (IMEI/Brand/Model/Storage/Phone Type) and an accessory
+  row would be five blank columns. A `message` above the report says so.
+  **Consequence: accessory purchases appear in NO report today** — that
+  is a known, accepted gap, and belongs in its own report if wanted.
+- **Supplier Report includes everything**, accessories included, because
+  it answers "what have we bought from this supplier" and a distributor's
+  earphone spend is part of that.
+
+**Counting rule that makes the aggregates correct:** Supplier Report
+pre-aggregates each source to **document grain** in a `UNION ALL`
+subquery *before* joining `Supplier`. Joining straight to a voucher's
+child tables fans out — one document with three lines would count as
+three purchases and have its value summed three times. Verified against
+ground truth computed independently with `frappe.get_all` (not the
+report's own SQL): 5 documents / 4140.0 for a supplier holding data in
+all four sources, whose vouchers carried 3 child lines, so a fan-out
+would have shown 7.
+
+**Value basis is GROSS**, per explicit decision. Only Purchase Voucher
+has a VAT concept; the other three record what was paid, so their
+per-unit `purchase_price` is multiplied by `qty` (Purchase Entry is the
+exception — one phone per document, so its price is already the total).
+Purchase Voucher contributes its **parent** `total_purchase_value`,
+never a re-sum of its child lines, so the figure stays the same one its
+print format reconciles against the supplier invoice.
+
+Other decisions worth not relitigating: rows in Purchase Report come
+from three doctypes, so `name` is a **Dynamic Link** against a new
+`Source` column rather than a fixed Link to Purchase Entry; a new **Qty**
+column exists because a row no longer means one handset beside a
+per-unit price; a voucher phone line shows `"3 of 5 captured"` while the
+IMEI filter searches the underlying `captured_imeis` blob; the brand
+filter is `LIKE` because voucher brands are free text carrying the model.
+Purchase Report's six filters had been **dead** — declared nowhere in the
+JSON, so no UI existed to set them — and are now declared.
+
+Two pre-existing bugs fixed along the way, both with their own commits:
+the `LEFT JOIN`/`WHERE` defect that silently deleted zero-purchase
+suppliers (now **Hard Rule 17**), and Purchase Report's dead filters.
+
+Verified as the real non-superuser accounts throughout, never
+`Administrator`: 27 + 21 + 16 automated checks, legacy Purchase Entry
+rows confirmed field-by-field identical to a pre-change baseline, drafts
+and cancelled excluded across all four sources, and a browser pass on
+both reports as both roles. A real user-entered voucher (`PV-00001`,
+supplier Midhu) was in both reports throughout and its 6,750.000 total
+was reconciled by hand against the document itself — old-format and
+new-format data side by side, so a fix that dropped legacy rows would
+have failed visibly.
 
 **Unified `Purchase Voucher` intake — built 2026-07-28, browser pass
 outstanding** (11 commits, `cf2fe7f`..`e1cc0d7`; plan at
@@ -1022,12 +1090,11 @@ ERPNext's Customer.
 **Added 2026-07-28, from the Purchase Voucher work** — four more, none
 urgent, none to be decided unilaterally:
 
-- **`Purchase Report` / `Supplier Report` do not see Purchase Vouchers.**
-  Both read `Purchase Entry` exclusively, so they go empty for new data.
-  Needs its own phase with Phase 3b's discipline — real baseline snapshot
-  first, one report at a time, historical rows confirmed byte-identical —
-  explicitly NOT a batch, which is the rule a rushed 4-report batch broke
-  once already.
+- ~~`Purchase Report` / `Supplier Report` do not see Purchase Vouchers.~~
+  **Done 2026-07-29** — see that section above. What remains from it is a
+  decision, not a bug: **should accessory purchases be reported at all?**
+  They currently appear in no report. Purchase Report excludes them
+  deliberately (phone-shaped columns); adding them means a new report.
 - **What `Phone.purchase_price` stores on a VAT-exclusive line** — as
   entered (current behaviour) or grossed up. The accountant's call. It
   only ever matters for New phones, since Used lines carry no
@@ -1052,6 +1119,28 @@ urgent, none to be decided unilaterally:
    list — that creates a second, competing sync mechanism from
    `fixtures/<doctype>.json` that can silently overwrite real data with stale
    content on every migrate.
+
+   **Update 2026-07-29 — `Report` behaves the same way, and the mechanism is
+   now understood.** Adding filters to `purchase_report.json` and running
+   `bench migrate` left the live record at `filters: []`. The cause is not
+   literally "insert-only": `frappe.modules.import_file` **skips any file whose
+   JSON `modified` timestamp is not newer than the DB record's**. Editing the
+   file without touching `modified` therefore changes nothing, silently, with a
+   clean migrate log. Two ways out:
+   - **bump `modified` in the JSON** (what was done — a real edit deserves a
+     real timestamp, and it makes fresh installs correct too); or
+   - force it: `from frappe.modules.import_file import import_file_by_path;
+     import_file_by_path(path, force=True)`.
+
+   This very likely explains some of the historical Workspace/Number Card
+   "insert-only" pain too — same code path, same skip.
+
+   **Also: `developer_mode` is OFF on this site.** Standard Reports cannot be
+   saved through the ORM at all (`Standard reports can only be created in
+   developer mode`), so `frappe.get_doc("Report", ...).save()` is not an option
+   — use `import_file_by_path`, or `frappe.db.set_value` for plain columns.
+   Note `Report.filters` is a **child table** (`Report Filter`), not a column,
+   so `db.set_value` does not work on it.
 
 2. **Script Report folder/file names are derived automatically from the
    Report's `name` field** (scrubbed: lowercased, spaces→underscores). A
@@ -1303,6 +1392,50 @@ urgent, none to be decided unilaterally:
       `Link` fields, and this app's sale rows reference phones through
       plain `Data` IMEI fields, which it cannot see at all.
 
+17. **In a report built on a `LEFT JOIN`, a condition about the JOINED side
+    belongs in the `ON` clause, never in `WHERE` — putting it in `WHERE`
+    silently converts the LEFT JOIN into an INNER JOIN.** Found 2026-07-29 in
+    Supplier Report, which had shipped this way since it was written. Its
+    date and phone_type filters read
+    `LEFT JOIN \`tabPurchase Entry\` pe ... WHERE pe.purchase_date >= %(from_date)s`.
+    For a supplier with no matching purchase `pe.purchase_date` is `NULL`,
+    `NULL >= '2026-07-01'` is not true, and **the whole supplier vanished from
+    the report** instead of showing 0.
+
+    What made it dangerous is that it looked like it worked. Anyone reviewing
+    supplier coverage with a date range set was reading "suppliers we bought
+    from in this window", not "all suppliers with their totals for this
+    window", and the missing rows left no trace to notice.
+
+    The split to apply: **a condition that decides which rows are LISTED goes
+    in `WHERE`; a condition that only decides which joined rows COUNT goes in
+    `ON`.** In Supplier Report, supplier-level filters (disabled, supplier
+    name) are WHERE; purchase-level filters (date, phone_type, docstatus) are
+    ON.
+
+    Two corollaries learned with it:
+    - After fixing this, **check the filters still actually filter.** It is
+      easy to "fix" the join by making the condition a no-op. The test that
+      catches it: a narrowing filter must still lower the count, and a window
+      containing no data must give every row 0 rather than hiding rows.
+    - Use `COUNT(<joined>.name)`, never `COUNT(*)`. A LEFT JOIN with no match
+      produces one all-NULL row, which `COUNT(*)` happily reports as 1.
+
+18. **Test-data cleanup must delete only what it created — never sweep a whole
+    table.** On 2026-07-29 a teardown script that did
+    `for n in frappe.get_all(dt): delete_doc(...)` removed a `Supplier` the
+    user had entered by hand minutes earlier. It was recoverable in full from
+    Frappe's own `Deleted Document` archive (which stores the complete JSON of
+    every deleted doc — remember this, it is the first thing to check), but
+    only because it was noticed immediately.
+
+    This was safe for months purely because the database was empty after the
+    2026-07-25 wipe. The moment real data exists, table-sweeping teardown is
+    destructive. **Write a manifest of created record names and delete from
+    that**, and collect side-effect records (Phones created by a submit,
+    `Item Price` rows auto-created from `Item.standard_rate`) by tracing them
+    from the manifest rather than by listing the table.
+
 ## Verification discipline — do not skip this
 
 After any migrate, DO NOT assume a fix worked just because the command
@@ -1391,6 +1524,18 @@ Supplier, Inventory, Profit, VAT — all built), 3 Number Cards, 2
 Workspaces (`Mobile Shop`, `Mobile Shop Home`), 1 Desk Page
 (`mobile-shop-pos`), 1 Custom HTML Block (the homepage launcher — **lives
 only in the site DB, not fixture-tracked**), and 9 Print Formats.
+
+**Which reports read which purchase sources** (as of 2026-07-29 — check
+the SQL, not this table, before relying on it):
+
+| Report | PE | Item Purchase | PBP | Purchase Voucher |
+|---|---|---|---|---|
+| Purchase Report | ✅ | ❌ *(deliberate)* | ✅ | ✅ phone lines only |
+| Supplier Report | ✅ | ✅ | ✅ | ✅ parent totals |
+
+`Inventory Report` reads `Phone` and so covers every source implicitly —
+a Phone is a Phone regardless of which intake created it. The five
+sale-side reports never touched the purchase doctypes.
 
 **Four intake doctypes coexist on purpose.** `Purchase Voucher` did not
 replace the older three: their documents must stay openable and
