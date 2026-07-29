@@ -416,7 +416,7 @@ Five reports built, individually schema-verified (via real `frappe.get_meta(...)
 
 1. **IMEI History Report** — full lifecycle by IMEI. Admin-only: Purchase Price.
 2. **Sales Report** — filterable by date/customer/IMEI/brand/model/VAT treatment. Admin-only: Purchase Price, Margin, VAT Amount, Net Profit. Staff-visible: Total Charged.
-3. **Purchase Report** — filterable by date/supplier/IMEI/brand/phone type. Admin-only: Purchase Price.
+3. **Purchase Report** — filterable by date/supplier/IMEI/brand/phone type. ~~Admin-only: Purchase Price.~~ **Staff-visible since 2026-07-29** — it reads `purchase_price` from the intake doctypes, where it is permlevel 0, not from `Phone` where it is permlevel 1. (IMEI History Report and Sales Report above DO read `Phone.purchase_price` and correctly remain Admin-only.)
 4. **Customer Report** — purchase count and total spent, COALESCE-safe for zero-sales customers. Same for both roles.
 5. **Supplier Report** — purchase count and total purchase value. Admin-only: Total Purchase Value. Admin-only "Include Disabled Suppliers" filter.
 

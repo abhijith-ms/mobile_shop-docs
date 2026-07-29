@@ -91,18 +91,14 @@ Architecture section for how the two reports partition the sources.
 message above the report explains the blanks so they read as a fact
 about the older form, not as missing data.
 
-**One inconsistency recorded rather than resolved.** This report's money
-columns are Admin-only, matching Purchase Report and Supplier Report —
-but that is deliberately *stricter than the doctype*:
-`Item Purchase.purchase_price` and `Purchase Entry.purchase_price` are
-both **permlevel 0**, so Staff enter and see the same number on the form.
-Every purchase-side report has always been stricter than the underlying
-permission. That was left alone here on the explicit ground that a new
-report should not settle a question about the existing ones.
-**Open decision: should the purchase-side reports be relaxed to match
-permlevel 0, or should those fields become permlevel 1?** Right now the
-two disagree, and whichever way it is resolved should be applied to all
-of them at once.
+**The permlevel inconsistency this surfaced is now RESOLVED** (commit
+`2037845`, same day): all three purchase-side reports — Purchase,
+Accessory Purchase and Supplier — show their money columns to Staff,
+matching the permlevel 0 of every field they read. They had been stricter
+than their own doctypes for months, which protected nothing since Staff
+type those numbers into the intake forms. Sales Report, Profit Report and
+VAT Report are untouched; see Hard Rule 3's table for which fields are
+genuinely sensitive and why `purchase_price` appears on both sides of it.
 
 **Purchase Report + Supplier Report extended to every purchase source —
 done and browser-verified 2026-07-29** (3 commits: `c3be0c9`, `3c27969`,
@@ -1118,13 +1114,11 @@ urgent, none to be decided unilaterally:
 
 - ~~`Purchase Report` / `Supplier Report` do not see Purchase Vouchers.~~
   **Done 2026-07-29.** ~~Should accessory purchases be reported at all?~~
-  **Answered — `Accessory Purchase Report` built the same day.** What
-  this left behind is a genuinely open question: **the purchase-side
-  reports are all stricter than their own doctypes.** `purchase_price` is
-  permlevel 0 on `Purchase Entry` and `Item Purchase` — Staff type it on
-  the form — yet all three reports hide money from Staff. Either relax
-  the reports or raise those fields to permlevel 1, but apply whichever
-  answer to all of them at once.
+  **Answered — `Accessory Purchase Report` built the same day.**
+  ~~The purchase-side reports are stricter than their own doctypes.~~
+  **Also answered 2026-07-29:** the three purchase-side reports were
+  relaxed to permlevel 0 and now show money to Staff (commit `2037845`).
+  Sales / Profit / VAT Report unchanged. See Hard Rule 3's table.
 - **What `Phone.purchase_price` stores on a VAT-exclusive line** — as
   entered (current behaviour) or grossed up. The accountant's call. It
   only ever matters for New phones, since Used lines carry no
@@ -1180,16 +1174,43 @@ urgent, none to be decided unilaterally:
 
 3. **`"permlevel": 1` on a Script Report column enforces NOTHING by itself.**
    Script Reports run raw SQL directly, bypassing normal document-level field
-   permissions entirely. Any sensitive field (purchase_price, margin,
-   vat_amount, net_profit) must be omitted ENTIRELY from both the `columns`
-   list and the SQL SELECT clause when the user isn't admin — never fetched,
-   never a NULL placeholder. Use a shared `has_admin_role()` pattern:
+   permissions entirely. Any sensitive field must be omitted ENTIRELY from
+   both the `columns` list and the SQL SELECT clause when the user isn't
+   admin — never fetched, never a NULL placeholder. Use a shared
+   `has_admin_role()` pattern:
    `bool(set(frappe.get_roles(frappe.session.user)) & {"Mobile Shop Admin", "System Manager"})`.
    For fully Admin-only reports (e.g. Profit Report, VAT Report): the JSON
    `roles` array must list ONLY Admin/System Manager (no Staff), AND
    `execute()` must call `has_admin_role()` as its literal first line and
    `frappe.throw(_("Not permitted"), frappe.PermissionError)` if false —
    belt-and-suspenders, not either/or.
+
+   **Which fields are actually sensitive (settled 2026-07-29 — check the
+   permlevel, do not go by the field's name):**
+
+   | Field | permlevel | In reports |
+   |---|---|---|
+   | `Phone.purchase_price` | **1** | Admin only |
+   | `Sales Entry` / `Phone Sale Item` — `margin`, `vat_amount`, `net_profit` | **1** | Admin only |
+   | `Item Sale Line.vat_amount` | **1** | Admin only |
+   | `Purchase Entry` / `Item Purchase` / `Phone Batch Purchase` — `purchase_price` | **0** | **Staff too** |
+   | `Purchase Voucher` line + parent money fields | **0** | **Staff too** |
+
+   The trap is that `purchase_price` appears in both halves of that table.
+   On `Phone` it is permlevel 1 and feeds the PMS margin; on the intake
+   doctypes it is permlevel 0 and Staff type it themselves. Sales Report
+   reads it from `tabPhone` (aliases `p` / `p2`) and so stays Admin-only;
+   Purchase Report reads it from the intake doctypes and does not.
+
+   The three purchase-side reports were relaxed to match their sources on
+   2026-07-29 — they had been stricter than the doctypes for months, which
+   protected nothing and made report and form disagree. **Before gating or
+   ungating any report column, look up the source field's permlevel.**
+
+   One knock-on, accepted: Staff can see purchase cost and selling price in
+   different reports, so per-unit margin is derivable even though `margin`
+   itself stays permlevel 1. That was already true — Staff enter purchase
+   prices on the intake forms and see selling prices at the POS.
 
 4. **Always verify schema before writing any report/query code.** Run
    `frappe.db.get_table_columns("<Doctype>")` in the bench console and use
