@@ -1,5 +1,14 @@
 # Second-Hand Mobile Shop ERP — Build Plan
 
+> **Note (2026-09-02):** The Phase 1–6 history below predates Shop Sale,
+> Purchase Voucher, and everything built after "5 of 8 reports" — it stopped
+> being actively maintained a while ago. `CLAUDE.md` in this same directory
+> is the current, actively-maintained narrative for everything since. Active
+> planning continues in the **"Accounting & POS Feature Set — Phase Plan
+> (2026-09-02)"** section near the end of this file. This note is a minimum
+> fix so a top-down read doesn't mistake the stale middle for current state;
+> a full refresh of the old phase history is a separate, deferred job.
+
 Custom Frappe/ERPNext app (`mobile_shop`) for a second-hand mobile phone shop in Bahrain, with IMEI traceability and Bahrain VAT Profit Margin Scheme (PMS) compliance.
 
 **Tools:** Cline + Kimi 2.5 (via Bedrock) as primary build driver. Antigravity free tier for light/secondary tasks only (quota is unreliable — don't depend on it for the main build).
@@ -430,3 +439,181 @@ Five reports built, individually schema-verified (via real `frappe.get_meta(...)
 **Workspace integration**: All five reports added as Shortcut blocks under a "Reports" header, built using Frappe's visual Workspace Editor (not hand-written JSON — repeated hand-written JSON attempts produced blank/broken pages). When adding a Shortcut to a Report, its "Type" field must be explicitly set to "Report" — defaults to "DocType" and won't show reports in the picker otherwise.
 
 **Remaining, not yet built**: Inventory Report, Profit Report, VAT Report — needed per the original PRD, must be rebuilt from scratch with proper schema verification and one-at-a-time review, exact same pattern as the five working reports above.
+
+---
+
+# Accounting & POS Feature Set — Phase Plan (2026-09-02)
+
+Everything below reflects a real client meeting with the shop's accountant,
+held ahead of this phase. He is satisfied with the overall setup, flagged
+that the Desk UI should eventually change (matching the already-planned
+custom React frontend), and gave ten feature requests. Do not relitigate the
+architecture decision below without new information from the client.
+
+## Accountant meeting — outcome
+
+### The ten requested items
+
+1. **Sale price when adding phones.** A sale price captured at intake.
+2. **POS: show VAT when Exclusive is selected.** Currently VAT only appears
+   on the printed invoice, not live on screen.
+3. **"Recent" option in POS.**
+4. **POS payment mode.** Method list is Cash, Card, Benefit Pay, Credit,
+   Mixed (Benefit Pay is Bahrain's national payment system).
+5. **Receivable / Payable shown on the home page.**
+6. **Payment Voucher after Purchase Voucher.** Records money actually paid
+   to a supplier against a Purchase Voucher.
+7. **Purchase Report should show VAT.**
+8. **Daybook.**
+9. **Cash Book and Bank Book.**
+10. **Credit / partial-payment sales.** A customer may not pay the full
+    amount at time of sale; the shortfall is tracked as an outstanding
+    balance and reflected in the Daybook.
+
+### Answers received on follow-up questions
+
+- **Payment methods** — Cash, Card, Benefit Pay, Credit, Mixed. "Credit"
+  means no money moved at time of sale. "Mixed" means any combination of
+  the others.
+- **Split payments** — each method's amount must be recorded separately,
+  not just a total.
+- **Banks** — bank names exist so the shop can track which bank the money
+  went into. A bank must be selectable on any method where money lands in a
+  bank (Card, Benefit Pay). Banks are an admin-managed list — admin adds
+  and removes accounts, with a default pre-selected.
+- **Credit limits** — not needed in the system. The shop handles that
+  themselves. The Credit option is for rare cases only, not routine use.
+- **Who can give credit** — Staff can give credit. Not admin-only.
+- **Credit sale customer** — a real customer is mandatory. Walk-in is not
+  acceptable for a credit sale.
+- **Balance payment** — recorded at the time it is actually paid. This
+  means a separate customer receipt entry is required (mirroring Payment
+  Voucher, but for money in). This was a gap in the accountant's original
+  list.
+- **Payment Voucher scope** — new Purchase Vouchers only. The three old
+  intake doctypes are being retired; no payments needed against them.
+- **Sale price at intake** — a suggested price, changeable at the counter.
+- **Purchase Report VAT** — yes, as separate net, VAT and gross columns.
+- **Register visibility** — Daybook, Cash Book and Bank Book are visible to
+  Staff, not admin-only.
+- **Register format** — no sample provided; use a standard/conventional
+  layout.
+
+> Staff visibility on the registers runs against the Profit/VAT Report
+> precedent (those stay Staff-blocked). It is consistent with the earlier
+> deliberate decision to show `purchase_price` to Staff in the purchase-side
+> reports (see Hard Rule 3 in CLAUDE.md), but worth a sanity check on what
+> the registers actually expose before building them — a Daybook or Bank
+> Book is closer to a full financial statement than a purchase report is.
+
+## Architecture decision — SETTLED
+
+**Fully bespoke, designed GL-ready.** The accounting layer will NOT use
+ERPNext's native `Bank Account`, `Mode of Payment`, or `Payment Entry`.
+
+### Reasoning (do not relitigate without new information)
+
+- Native `Bank Account` is not standalone. It links to a `Bank` doctype and,
+  to be accounting-useful, to an `Account` in the Chart of Accounts — which
+  drags in Company and CoA setup this app has deliberately avoided.
+- Every native doctype Staff must see in a Link field requires Custom
+  DocPerm rows on a core doctype. That is the Hard Rule 15 trap in
+  CLAUDE.md, which already cost a full cycle on Item and UOM.
+- The main payoff of native doctypes is free Desk UI and free native
+  reports. The planned custom React frontend and the bespoke report layer
+  make both irrelevant here.
+- The bank master is a handful of rows — trivially migratable in Phase A.
+
+### What is being built instead
+
+- A bespoke `Bank` master: name, account number, `is_default`, `disabled`.
+- A bespoke payment child table on Shop Sale and on Payment Voucher.
+
+### The GL-ready field contract
+
+See CLAUDE.md Hard Rule 20 for the full field contract every payment row
+must carry. Summary: date, direction (in/out), method, amount, bank link,
+party, and the parent document it settles, using ERPNext Payment Entry's own
+field vocabulary (`mode_of_payment`, `paid_amount`, `party`, `party_type`,
+`reference_doctype`, `reference_name`) so a future Phase A GL migration is
+mechanical rather than a re-design.
+
+**Accepted trade-off:** Phase A will need a backfill job to produce
+historical GL entries, rather than having them accrue natively from day one.
+
+## Build sequencing — Phases 1 to 6
+
+Dependency-ordered. Each phase follows the established working style: scope
+→ plan → review → small reviewed steps with one commit each → empirical
+verification → browser pass as both a real Staff account and Mobile Shop
+Admin, never Administrator.
+
+### Phase 1 — quick wins, no dependencies
+
+Items 1, 2, 3, 7. Build order within the phase: **1a first** (smallest).
+
+- **1a — Purchase Report VAT columns (item 7).** Add `net_amount`,
+  `vat_amount`, `amount`, following exactly the pattern already built in
+  Accessory Purchase Report, including the NULL-not-zero rule for sources
+  that never recorded VAT. Purchase Voucher lines carry per-line VAT; the
+  legacy sources do not.
+- **1b — Suggested sale price at intake (item 1).** Field goes on both
+  `Phone` and the Purchase Voucher phone line. Suggested, not fixed: POS
+  pre-fills from it and the cashier can change it at the counter with no
+  special permission. Open in its own plan: how the value flows from
+  voucher line to Phone on submit; what happens for batch-received phones
+  where the Phone record does not exist until sale time; and what permlevel
+  the field gets — decide deliberately rather than copying, since
+  `purchase_price` is permlevel 1 on `Phone` but permlevel 0 on the intake
+  doctypes, and sale price is not margin-sensitive the way purchase price
+  is.
+- **1c — Live VAT display in POS on Exclusive (item 2).** Display-only. The
+  calculation already exists and is verified correct — reuse it, do not
+  reimplement.
+- **1d — Recent sales in POS (item 3).** Confirmed as recent sales (not
+  recent items or customers). Open in its own plan: how many, what columns,
+  panel vs. dialog, and whether tapping one does anything. The existing
+  void-last-sale feature already touches recent-sale state — check whether
+  this should reuse or extend it rather than adding a parallel lookup.
+
+### Phase 2 — bespoke `Bank` master
+
+Small and standalone. Unblocks item 4, item 6, and the Bank Book.
+
+### Phase 3 — money in (items 4 + 10)
+
+Built together — they are one form section, not two.
+
+- Needs a child table, one row per payment component (method, amount,
+  bank), because Mixed can span Card and Benefit Pay landing in different
+  banks. A few fields on Shop Sale cannot represent that.
+- A real customer is forced on any Credit component.
+- BHD 3-decimal rounding rule applies: when rounding a total from multiple
+  parts, round two and derive the third.
+- Includes the customer receipt document for later balance payments.
+
+### Phase 4 — money out (item 6)
+
+Payment Voucher against Purchase Voucher. Reuses Phase 3's payment
+component rather than reimplementing it. Purchase Voucher only — old intake
+doctypes are out of scope.
+
+### Phase 5 — the registers (items 8, 9)
+
+Daybook, Cash Book, Bank Book. Pure read layers over Phases 3 and 4 — they
+cannot be built earlier because the data does not exist yet. Each payment
+child row is already a register line. Cash Book and Bank Book are the same
+query filtered by method, with running balances.
+
+### Phase 6 — Receivable / Payable on home (item 5)
+
+Last, deliberately. Receivable is only meaningful once item 10 exists;
+Payable only once item 6 does. Building earlier would ship a dashboard tile
+showing two permanent zeros.
+
+## Open question — not decided yet
+
+**Frontend vs. backend sequencing.** Phases 3–6 build Desk-side forms that
+the planned custom React frontend would then need to re-implement. Whether
+the accounting layer or the frontend rebuild goes first is unresolved.
+Record it as open — do not assume Desk is the permanent target.

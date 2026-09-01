@@ -64,6 +64,17 @@ VAT-exclusive line (currently stored exactly as entered), and whether a
 voucher mixing Used and standard-VAT lines should harden from a warning
 into a hard block.
 
+**A full accountant meeting happened 2026-09-02** (separate from the two
+open questions above, which are still unanswered) — full detail in
+PROJECT_PLAN.md's "Accounting & POS Feature Set — Phase Plan" section: ten
+feature requests plus follow-up answers, a settled bespoke/GL-ready
+accounting architecture decision (Hard Rule 20), and a Phase 1–6 build
+sequence. **Phase 1 (four quick-win items, no shared dependencies) is
+starting now, item 1a first** (Purchase Report VAT columns) — see
+PROJECT_PLAN.md for the other three (1b suggested sale price, 1c live POS
+VAT display, 1d recent sales in POS), each gated behind its own
+plan-before-code cycle once the items ahead of it are browser-verified.
+
 The report follow-up phase that used to sit here is **done** (2026-07-29,
 see below): `Purchase Report` and `Supplier Report` now read every
 purchase source, and the accessory gap that phase surfaced was closed by
@@ -1155,6 +1166,26 @@ urgent, none to be decided unilaterally:
   through Purchase Voucher, or whether Sales/Inventory Report's Model
   column and filter should fall back to searching `brand`.
 
+**Added 2026-09-02, from the accountant meeting and the new accounting/POS
+feature set** (full detail in PROJECT_PLAN.md's "Accounting & POS Feature
+Set — Phase Plan" section):
+
+- **Frontend vs. backend sequencing is unresolved.** Phases 3–6 of the new
+  accounting work (money in/out, the three registers) build Desk-side forms
+  that the planned custom React frontend would then need to re-implement.
+  Whether the accounting layer or the frontend rebuild goes first has not
+  been decided — do not assume Desk is the permanent target, and do not
+  pick an order unilaterally.
+- **The accounting layer's architecture is SETTLED, not open** — listed
+  here only so it isn't mistaken for a pending decision: fully bespoke,
+  GL-ready `Bank` master + payment child table, deliberately NOT ERPNext's
+  native `Bank Account`/`Mode of Payment`/`Payment Entry`. Full reasoning in
+  PROJECT_PLAN.md. Before ever proposing "just use ERPNext's native Payment
+  Entry" here, read that reasoning — it was already weighed and rejected
+  (Company/CoA drag-in, the Hard Rule 15 Custom DocPerm trap, the
+  custom-React-frontend payoff argument). See Hard Rule 20 for the field
+  contract that keeps this decision cheap to migrate later.
+
 ## Hard rules — these came from real bugs, don't relearn them the hard way
 
 1. **Workspace and Number Card are "standard" doctypes.** They sync from
@@ -1556,6 +1587,38 @@ urgent, none to be decided unilaterally:
     when verifying an `if_owner` grant**, and verify both directions (own doc
     writable, someone else's not) with a real `.save()`, not just
     `has_permission`.
+
+20. **Every bespoke payment-related row must carry the GL-ready field
+    contract, from the first commit that creates it — not retrofitted
+    later.** Settled 2026-09-02 alongside the decision to build a bespoke
+    accounting layer instead of using ERPNext's native `Bank Account`/`Mode
+    of Payment`/`Payment Entry` (see PROJECT_PLAN.md's "Accounting & POS
+    Feature Set" section for the full reasoning). What makes that decision
+    safe rather than a permanent dead end is **not** the doctype choice —
+    it's the field set. A future Phase A (real GL integration) needs to be
+    able to generate a GL entry from each historical payment row with no
+    re-capture, so every one of them — Shop Sale's payment child table,
+    Payment Voucher's, and any later addition — must carry:
+    - date
+    - direction (in / out)
+    - method
+    - amount
+    - bank link
+    - party
+    - the parent document it settles
+
+    Field names deliberately borrow ERPNext's own Payment Entry vocabulary
+    so the eventual Phase A mapping is near-mechanical rather than a
+    redesign: `mode_of_payment`, `paid_amount`, `party`, `party_type`,
+    `reference_doctype`, `reference_name`. Do not invent parallel names for
+    the same concepts, even if a shorter or more "obvious" name occurs to
+    you at the time — the whole point is that these fields already read as
+    Payment Entry fields.
+
+    **Accepted trade-off**, so it isn't rediscovered as a surprise later:
+    Phase A will still need a one-time backfill job to produce historical GL
+    entries from these rows, since they won't have been accruing natively
+    from day one.
 
 ## Verification discipline — do not skip this
 
