@@ -69,11 +69,82 @@ open questions above, which are still unanswered) — full detail in
 PROJECT_PLAN.md's "Accounting & POS Feature Set — Phase Plan" section: ten
 feature requests plus follow-up answers, a settled bespoke/GL-ready
 accounting architecture decision (Hard Rule 20), and a Phase 1–6 build
-sequence. **Phase 1 (four quick-win items, no shared dependencies) is
-starting now, item 1a first** (Purchase Report VAT columns) — see
-PROJECT_PLAN.md for the other three (1b suggested sale price, 1c live POS
-VAT display, 1d recent sales in POS), each gated behind its own
-plan-before-code cycle once the items ahead of it are browser-verified.
+sequence. See PROJECT_PLAN.md for items 1c (live POS VAT display) and 1d
+(recent sales in POS), each still gated behind its own plan-before-code
+cycle once the items ahead of it are browser-verified.
+
+**1a (Purchase Report VAT columns, commit `21839d6`) — code and API-level
+verification now done, real browser click-through still outstanding.**
+Re-verified 2026-09-02: both real non-superuser accounts
+(`clashams4@gmail.com` / Mobile Shop Staff, `msadmin.test@mobileshop.local`
+/ Mobile Shop Admin — never `Administrator`) get identical columns
+including `purchase_price`/`net_amount`/`vat_amount`/`amount` via the real
+`frappe.desk.query_report.run()` entrypoint. The legacy-source blank-vs-zero
+case (flagged as untested in the original commit, since zero real Purchase
+Entry/Phone Batch Purchase rows existed to check) was closed by creating
+one of each as real submitted documents (manifest-tracked per Hard Rule
+18), confirming `net_amount`/`vat_amount` arrive as JSON `null` (not `0.0`)
+in that same API response — the exact payload the browser's report
+DataTable renders from, and null already confirmed to render blank rather
+than `0.000` when this identical pattern shipped on Accessory Purchase
+Report. Both test documents were then cancelled (as the real Admin
+account — cancel is admin-only) and deleted, including the side-effect
+`Phone` (auto-deleted by `Purchase Entry.on_cancel`) and the synthetic
+`Phone Batch` master (deleted directly once its `untracked_qty` confirmed
+back to 0); zero residue confirmed, the 3 real Purchase Vouchers and the 1
+real Phone Batch (`8534578896`) confirmed unchanged throughout.
+
+**What's still missing**: an actual browser screenshot/click-through as
+both roles. No Claude-in-Chrome connection was available this session
+either — same gap the original commit disclosed. This is a real, not
+cosmetic, gap: the API check proves the *data* reaching the frontend is
+correct, not that the DataTable actually renders it correctly on screen.
+Needs a human (or a future session with a working browser connection) to
+open the report as both accounts and eyeball it before 1a is fully closed.
+
+**1b (suggested sale price at intake) — planned, not yet reviewed or
+built.** Full plan at `~/.claude/plans/suggested-sale-price-at-intake.md`:
+new `suggested_sale_price` field on `Phone`, `Purchase Voucher Phone Line`,
+and `Phone Batch` (mirrors `last_purchase_price`'s overwrite-on-restock
+pattern for the batch case); flows through `create_phone_record()`,
+`add_to_phone_batch()`, and `create_phone_from_batch()` exactly like
+`purchase_price` already does; pre-fills the POS cart's price input via a
+`pos_scan()` field addition, replacing today's hardcoded `selling_price: 0`,
+while staying fully editable at the till. **Deliberately permlevel 0
+everywhere, diverging from `Phone.purchase_price`'s permlevel 1** — reasoned
+out explicitly in the plan (not margin-sensitive, Staff already see and
+type the number at both intake and the till). Deliberately does NOT touch
+`Purchase Entry`/`Item Purchase`/`Phone Batch Purchase` — those three are
+historical-only intake forms with no homepage tile, so Phones created
+through them will simply have a permanently blank suggested price, the same
+NULL-not-zero honesty used elsewhere. Needs review before any code is
+written.
+
+**Purchase Report's blank Model/Storage columns — investigated
+2026-09-02, not a bug, needs a scoping decision.** Every live row in
+Purchase Report is a Purchase Voucher row right now (there are currently
+zero submitted Purchase Entry/Phone Batch Purchase documents — all real
+intake has moved to Purchase Voucher), and Purchase Voucher Phone Line has
+no separate Model/Storage fields at all — by the client's own explicit
+request, brand and model are folded into one free-text `brand` field (this
+is the deliberate design already recorded in the Purchase Voucher section
+below, and already flagged as an open item: "Whether `Phone.model` staying
+blank is acceptable"). Confirmed against real data: `Purchase Voucher Phone
+Line.brand` holds values like `"iPhone 16 Pro"`, `"Samsung S25 Ultra"`,
+`"iPhone 17"` — exactly what showed up in the Brand column with Model/
+Storage blank next to them. Purchase Report's SQL already explicitly sets
+`NULL AS model, NULL AS storage` for the Purchase Voucher branch (commented
+in `purchase_report.py`), while the Purchase Entry and Phone Batch Purchase
+branches correctly select real `model`/`storage` values — confirmed via the
+1a test data above (both test records were entered with distinct
+model/storage values and read back correctly by the report's SQL for those
+two branches). So nothing is miswired and nothing needs fixing in the
+report itself; the report is correctly surfacing a pre-existing intake gap.
+The open decision (unchanged from when it was first flagged, just now
+visibly affecting Purchase Report too): leave it as-is, or have
+Purchase/Sales/Inventory Report's Model column and filter fall back to
+parsing/searching the free-text `brand` field. Not decided; do not "fix"
+Purchase Report unilaterally.
 
 The report follow-up phase that used to sit here is **done** (2026-07-29,
 see below): `Purchase Report` and `Supplier Report` now read every
