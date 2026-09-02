@@ -111,7 +111,39 @@ Hard Rule 14 trap). With the correct accounts confirmed: `/app/query-report/Purc
 rendered identically for both — Source through Qty, then Purchase
 Price/Net Amount/VAT Amount/Amount all visible and correct (including the
 Used line's genuine 0.000 VAT), no Model or Storage column present for
-either role. 1a is now fully closed.
+either role.
+
+**Correction — that click-through was not actually the full closure it was
+recorded as.** Re-reading it later: at the time it ran, zero real Purchase
+Entry/Phone Batch Purchase documents existed (see the "closed by creating
+one of each" sentence above), so every row the browser actually rendered
+that session was a Purchase Voucher row — the blank-vs-zero legacy-source
+case was confirmed only via the API's JSON `null` plus analogy to
+Accessory Purchase Report, never actually seen blank in a rendered
+DataTable cell. This sat unnoticed across several sessions despite the
+prose above reading as if it were done.
+
+**Actually closed 2026-09-02, later the same day.** New manifest-tracked
+test data (`PE-2026-09-00001`, `PBP-2026-09-00001` — same discipline as
+the original closure: real submitted documents, Hard Rule 18 manifest,
+cancel-then-delete per the new Hard Rule 21, never force-delete) made one
+real legacy-source row of each kind exist so there was something to
+actually click through. Real browser screenshots, both real accounts
+(`clashams4@gmail.com`, then `msadmin.test@mobileshop.local` — confirmed
+via `/app/user-profile` each time, catching nothing this round since both
+logins were correct on the first try): `/app/query-report/Purchase%20Report`
+rendered **genuinely blank** Net Amount and VAT Amount cells for both the
+Phone Batch Purchase row and the Purchase Entry row, with Amount correctly
+populated (231.750 and 111.500) — pixel-identical between the two
+accounts. The four Purchase Voucher rows alongside them rendered their
+real values as before, including the Used line's genuine 0.000 VAT.
+Cleaned up immediately after: both documents cancelled (their `on_cancel`
+reversed correctly — the created `Phone` gone, the synthetic `Phone
+Batch`'s `untracked_qty` back to 0 before that master was deleted too)
+then deleted, zero residue confirmed from a fresh connection (`Purchase
+Entry`/`Phone Batch Purchase` counts back to 0, `Phone` count back to 6,
+the real `8534578896` batch unchanged at 22, Purchase Voucher/Supplier
+counts unchanged). 1a is now genuinely fully closed.
 
 **1b (suggested sale price at intake) — built and verified 2026-09-02,
 commit `30b19ce` in `apps/mobile_shop`.** Full design at
