@@ -551,13 +551,16 @@ Admin, never Administrator.
 ### Phase 1 — quick wins, no dependencies
 
 Items 1, 2, 3, 7. Build order within the phase: **1a first** (smallest).
+**Phase 1 is fully done as of 2026-09-02** — all four items built and
+verified; see CLAUDE.md's "Current state" section for each item's build
+and verification detail.
 
-- **1a — Purchase Report VAT columns (item 7).** Add `net_amount`,
+- **1a — Purchase Report VAT columns (item 7). Done, commit `21839d6`.** Add `net_amount`,
   `vat_amount`, `amount`, following exactly the pattern already built in
   Accessory Purchase Report, including the NULL-not-zero rule for sources
   that never recorded VAT. Purchase Voucher lines carry per-line VAT; the
   legacy sources do not.
-- **1b — Suggested sale price at intake (item 1).** Field goes on both
+- **1b — Suggested sale price at intake (item 1). Done, commit `30b19ce`.** Field goes on both
   `Phone` and the Purchase Voucher phone line. Suggested, not fixed: POS
   pre-fills from it and the cashier can change it at the counter with no
   special permission. Open in its own plan: how the value flows from
@@ -567,10 +570,10 @@ Items 1, 2, 3, 7. Build order within the phase: **1a first** (smallest).
   `purchase_price` is permlevel 1 on `Phone` but permlevel 0 on the intake
   doctypes, and sale price is not margin-sensitive the way purchase price
   is.
-- **1c — Live VAT display in POS on Exclusive (item 2).** Display-only. The
+- **1c — Live VAT display in POS on Exclusive (item 2). Done, commit `c7a46ed`.** Display-only. The
   calculation already exists and is verified correct — reuse it, do not
   reimplement.
-- **1d — Quick-select product panel in POS (item 3).** Scope corrected
+- **1d — Quick-select product panel in POS (item 3). Done, commit `a47ea45`.** Scope corrected
   2026-09-02: this is NOT a recent-sales log (that was the original
   meeting framing) — it is a quick-select panel of top-selling *products*
   so staff can add common items to the cart fast, ranked by frequency over

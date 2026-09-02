@@ -69,12 +69,9 @@ open questions above, which are still unanswered) — full detail in
 PROJECT_PLAN.md's "Accounting & POS Feature Set — Phase Plan" section: ten
 feature requests plus follow-up answers, a settled bespoke/GL-ready
 accounting architecture decision (Hard Rule 20), and a Phase 1–6 build
-sequence. **Phase 1 items 1a, 1b, and 1c are now done** (see their own
-entries below). **1d (recent sales in POS) is next and not yet planned**
-— per PROJECT_PLAN.md it's open-ended: how many, what columns, panel vs.
-dialog, and whether the existing void-last-sale feature's recent-sale
-state should be reused rather than adding a parallel lookup. Same
-plan-before-code cycle as the rest of Phase 1.
+sequence. **All four Phase 1 items (1a, 1b, 1c, 1d) are now done** (see
+their own entries below) — **Phase 1 is fully closed as of 2026-09-02**.
+Phase 2 (bespoke `Bank` master) is next, not yet started, not yet planned.
 
 **1a (Purchase Report VAT columns, commit `21839d6`) — fully closed
 2026-09-02, including the real browser click-through.** Re-verified:
@@ -258,6 +255,68 @@ clear-cache` alone did not clear the stale POS page script this time — the
 browser's own `localStorage` also had to be cleared
 (`localStorage.clear(); sessionStorage.clear();`) before a fresh page load
 picked up the new JS. See Hard Rule 13's update below.
+
+**1d (quick-select product panel in POS) — built and verified 2026-09-02,
+commit `a47ea45` in `apps/mobile_shop`, merged to `develop` and pushed.**
+Scope was corrected the same day before this was built — see the note in
+PROJECT_PLAN.md's Phase 1 section and full design at
+`~/.claude/plans/quick-select-product-panel-pos.md`: this is a 5-entry,
+always-visible panel of top-selling *products* ranked by 7-day sale
+frequency and filtered by real stock, not the recent-sales-log the
+accountant meeting's item 3 was originally framed as. Confirmed by reading
+the code before building: the void-last-sale feature's `this.last_sale`
+state is a single completed *sale document*, not a product ranking, so
+this is a separate lookup, not a reuse of that state.
+
+New `quick_select_products()` ranks accessories and phone models together
+by 7-day sale count (two `GROUP BY` queries, merged and truncated in
+Python), then walks the merged ranking checking real stock until 5
+qualifying entries are found — a highly-ranked but out-of-stock product is
+skipped rather than shown as an empty tile. Reuses existing POS code
+throughout rather than reinventing it: an accessory tap calls
+`add_accessory_line()` (the same path barcode scanning and the existing
+"Browse Accessories" panel already use — the two panels deliberately
+coexist, full-catalog vs. 7-day speed-strip, not merged); a phone-model
+tap with tracked In Stock units opens the existing "Search Phone by
+Brand/Model" dialog, now able to take a prefill and auto-search instead of
+only ever opening blank; a phone-model tap with only untracked Phone Batch
+stock routes into the existing capture-IMEI-at-sale batch flow
+(`handle_scanned_code()` on the batch's UPC — same resolution path a
+barcode scan takes) rather than showing an empty IMEI picker. Both tap
+behaviors are visibly distinguished (color-coded badge, different label
+text: "Add to Cart" vs. "Select Unit" vs. "From Batch"), not just
+behaviorally different — the settled decision from the plan review.
+
+**Real bug caught during verification, not by inspection**: the batch-stock
+match used plain SQL `=` on brand/model, which never matches SQL `NULL` —
+and real intake data has `model = NULL` almost everywhere, since Purchase
+Voucher folds brand and model into one free-text field (the same
+convention already recorded in the Purchase Voucher and Purchase Report
+sections). Confirmed directly against real production data
+(`brand='iPhone 17', model=NULL`, the real 22-unit `8534578896` batch) that
+the naive query would have silently found no match at all — not a rare
+edge case, the common case in this shop's real data. Fixed with
+MySQL/MariaDB's null-safe `<=>` operator.
+
+Verified via the real API as both `clashams4@gmail.com` and
+`msadmin.test@mobileshop.local` — identical ranking/stock results for both
+(no permission-sensitive fields reach this feature, confirmed rather than
+assumed). Full interactive browser pass done as
+`msadmin.test@mobileshop.local` only (confirmed via `/app/user-profile`),
+skipped repeating as Staff given the confirmed API-level parity — exercised
+every scenario from the plan's verification step with manifest-tracked
+test data: an accessory tile straight to cart; a phone-model tile with one
+tracked unit remaining (opened the dialog pre-filled and auto-searched,
+correctly excluding the already-sold IMEI); a phone-model tile with zero
+tracked units and 5 batch units (added a blank-IMEI cart line directly,
+identical to a UPC scan); the 7-day window boundary (a sale 6 days old
+included, a sale 8 days old correctly excluded); and the empty state
+("Not enough recent sales yet.") once test data was removed. All test data
+cleaned up via cancel-then-delete per the new Hard Rule 21 (never
+force-delete), zero residue confirmed independently from a fresh
+connection — real data (5 pre-existing Shop Sales, the real
+`8534578896` batch at 22 units, real Item stock levels) unchanged
+throughout.
 
 **Purchase Report's blank Model/Storage columns — investigated
 2026-09-02, not a bug, needs a scoping decision.** Every live row in
