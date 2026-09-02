@@ -110,53 +110,77 @@ Price/Net Amount/VAT Amount/Amount all visible and correct (including the
 Used line's genuine 0.000 VAT), no Model or Storage column present for
 either role. 1a is now fully closed.
 
-**1b (suggested sale price at intake) — planned, not yet reviewed or
-built.** Full plan at `~/.claude/plans/suggested-sale-price-at-intake.md`:
-new `suggested_sale_price` field on `Phone`, `Purchase Voucher Phone Line`,
-flows through `create_phone_record()` exactly like `purchase_price`
-already does for a captured-IMEI phone line; pre-fills the POS cart's
-price input via a `pos_scan()` field addition, replacing today's
+**1b (suggested sale price at intake) — built and verified 2026-09-02,
+commit `30b19ce` in `apps/mobile_shop`.** Full design at
+`~/.claude/plans/suggested-sale-price-at-intake.md`. New
+`Phone.suggested_sale_price` and `Purchase Voucher Phone
+Line.suggested_sale_price`, permlevel 0 everywhere (deliberately diverging
+from `Phone.purchase_price`'s permlevel 1 — not margin-sensitive, Staff
+already see and type the number at both intake and the till); flows
+through `create_phone_record()` for a captured-IMEI line and pre-fills the
+POS cart's price input via a `pos_scan()` addition, replacing the old
 hardcoded `selling_price: 0`, while staying fully editable at the till.
-**Deliberately permlevel 0 everywhere, diverging from
-`Phone.purchase_price`'s permlevel 1** — reasoned out explicitly in the
-plan (not margin-sensitive, Staff already see and type the number at both
-intake and the till). Deliberately does NOT touch `Purchase
-Entry`/`Item Purchase` — historical-only intake forms with no homepage
-tile, so Phones created through them will simply have a permanently blank
-suggested price, the same NULL-not-zero honesty used elsewhere.
+Deliberately does not touch `Purchase Entry`/`Item Purchase` — historical
+forms with no homepage tile.
 
-**Batch-price part of the plan reworked 2026-09-02, per explicit
-instruction**: a single `Phone Batch.suggested_sale_price` field that
-overwrites on every restock (the `last_purchase_price` pattern, reached
-for by analogy at first) was rejected — restocking a batch at a new
-suggested price must NOT reprice units already sitting in that batch, only
-newly-received units get the new price, and a scalar field cannot
-represent two prices for anonymous units in the same batch. Reworked to a
-new `Phone Batch Lot` child table (one row per restock: `qty`,
-`remaining_qty`, `suggested_sale_price`, `purchase_date`,
+**Batch-received (untracked) phones needed more than one field, per
+explicit instruction**: a single `Phone Batch.suggested_sale_price`
+field that overwrites on every restock (reached for by analogy to
+`last_purchase_price`, which is allowed to go stale since it feeds no VAT
+math) can't represent two prices for anonymous units already in the same
+batch. Built instead as a new `Phone Batch Lot` child table — one row per
+restock (`qty`, `remaining_qty`, `suggested_sale_price`, `purchase_date`,
 `source_doctype`/`source_name`), consumed **FIFO** at sale time inside the
-same lock that already decrements `Phone Batch.untracked_qty` — considered
-and rejected letting the cashier pick a price at the till instead, since
-batch units are anonymous by design specifically so staff never have to
-track which physical delivery a shelf unit came from. `Phone Batch
-Purchase` (still fully functional, just no homepage tile) needs one small
-internal touch — it also inserts a blank-priced lot row on submit — or the
-`untracked_qty == SUM(remaining_qty)` invariant breaks the moment both
-intake paths touch the same UPC; **checked against real data before
-writing this** (not assumed): zero `Phone Batch Purchase` documents exist
-in this database ever, so the real `8534578896` batch was created entirely
-by one Purchase Voucher line. A one-time backfill is required before this
-ships, since that same real batch already carries `untracked_qty=22` with
-zero lot rows today. The rework also makes cancellation strictly more
-precise almost for free: a `phone_batch_lot` reference field lets
-`reverse_phone_line()`/`reverse_purchase()` check the exact lot a document
-created instead of the whole pool, with the existing pool-based check kept
-as a fallback for pre-existing documents that predate the field. Full
-design, including the "why FIFO" reasoning and the full verification plan,
-in the plan file. Everything else in the plan (Phone/Purchase Voucher
-Phone Line fields, Path A, the permlevel decision, POS pre-fill for
-non-batch phones) is unchanged and approved as written. Needs review
-before any code is written.
+same lock that already decrements `untracked_qty`. Considered and rejected
+letting the cashier pick a lot's price at the till, since batch units are
+anonymous specifically so staff never track which delivery a shelf unit
+came from. The still-functional `Phone Batch Purchase` legacy path also
+creates a lot (blank-priced — that form has no suggested-price field) so
+the `untracked_qty == SUM(remaining_qty)` invariant can't drift when both
+intake paths touch the same UPC; confirmed empirically that zero such
+documents exist in this database, so the collision hasn't happened yet but
+remained a live risk since the doctype is still submittable. A one-time
+`post_model_sync` patch (`backfill_phone_batch_lots`) backfilled a lot for
+every pre-existing batch, including the real `8534578896` (22 units, none
+before this shipped). Cancellation also got strictly more precise: a
+`phone_batch_lot` reference on `Purchase Voucher Phone Line`/`Phone Batch
+Purchase` lets the reversal check the exact lot a document created instead
+of the whole pool, with the original pool-based check kept as a fallback
+for documents that predate the field.
+
+**Correction found mid-build, worth remembering**: the plan's original
+"NULL means no suggestion" design (drawn by analogy from Purchase Report's
+NULL-not-zero columns) does not actually work — confirmed directly against
+`frappe/database/schema.py`, every `Currency`/`Float`/`Percent`/`Int`
+column is unconditionally `NOT NULL DEFAULT 0`, no per-field override
+exists. Purchase Report's NULL is a `UNION` query-time literal for a
+column that doesn't exist in the source table at all, a fundamentally
+different mechanism from a real stored doctype field. **Resolved by
+explicit decision: 0 is the sentinel for "no suggestion", not NULL** — the
+same convention this app already uses for PMS margin flooring, and
+functionally unchanged from what was already built (the POS pre-fill
+already treated 0 and "no suggestion" identically via `flt(x) || 0`).
+
+Verified via the real document API as both real accounts and a live
+browser pass (Claude cannot type passwords, so the user logged in for
+each check): Path A; the FIFO no-repricing scenario end to end — sell from
+an older lot, restock the same UPC at a different price, confirm the
+older lot's price and remaining stock are untouched, confirm the POS
+preview stays on the old price until that lot is exhausted, only then
+moves to the new one; the legacy `Phone Batch Purchase` path coexisting
+correctly on a shared batch; cancellation precision (clean reversal before
+any sale, correctly blocked after a partial sale, blocked attempt leaves
+the lot untouched); and a real submitted voucher's suggested price
+visibly pre-filling the POS cart price input in the browser. All test
+data cleaned up via manifest, zero residue, real data (`PV-00001/4/5`, the
+real `8534578896` batch and its backfilled lot) confirmed unchanged
+throughout.
+
+**Not yet merged into `develop`** — committed on branch
+`worktree-hashed-sparking-naur` in `apps/mobile_shop` (one commit ahead of
+`develop` at the time), same isolation constraint as 1a: `git merge
+--ff-only worktree-hashed-sparking-naur` from a normal session against
+`apps/mobile_shop` merges it in.
 
 **Purchase Report's blank Model/Storage columns — investigated
 2026-09-02, not a bug, needs a scoping decision.** Every live row in
