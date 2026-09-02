@@ -73,9 +73,9 @@ sequence. See PROJECT_PLAN.md for items 1c (live POS VAT display) and 1d
 (recent sales in POS), each still gated behind its own plan-before-code
 cycle once the items ahead of it are browser-verified.
 
-**1a (Purchase Report VAT columns, commit `21839d6`) — code and API-level
-verification now done, real browser click-through still outstanding.**
-Re-verified 2026-09-02: both real non-superuser accounts
+**1a (Purchase Report VAT columns, commit `21839d6`) — fully closed
+2026-09-02, including the real browser click-through.** Re-verified:
+both real non-superuser accounts
 (`clashams4@gmail.com` / Mobile Shop Staff, `msadmin.test@mobileshop.local`
 / Mobile Shop Admin — never `Administrator`) get identical columns
 including `purchase_price`/`net_amount`/`vat_amount`/`amount` via the real
@@ -94,13 +94,21 @@ account — cancel is admin-only) and deleted, including the side-effect
 back to 0); zero residue confirmed, the 3 real Purchase Vouchers and the 1
 real Phone Batch (`8534578896`) confirmed unchanged throughout.
 
-**What's still missing**: an actual browser screenshot/click-through as
-both roles. No Claude-in-Chrome connection was available this session
-either — same gap the original commit disclosed. This is a real, not
-cosmetic, gap: the API check proves the *data* reaching the frontend is
-correct, not that the DataTable actually renders it correctly on screen.
-Needs a human (or a future session with a working browser connection) to
-open the report as both accounts and eyeball it before 1a is fully closed.
+**The real browser click-through, done later the same session** once a
+Claude-in-Chrome connection became available (it wasn't earlier in the
+session — same gap the original commit disclosed, until it resolved
+mid-session): the user logged into the browser themselves as each real
+account (Claude does not type passwords, including ones a user supplies —
+this is a hard rule, not a project-specific choice) and confirmed via
+`/app/user-profile` before each check, catching one real near-miss along
+the way — the first "Admin" login landed on the `Administrator` superuser
+account, not `msadmin.test@mobileshop.local`, and was caught and redone
+before it could be mistaken for a real role-permission check (exactly the
+Hard Rule 14 trap). With the correct accounts confirmed: `/app/query-report/Purchase%20Report`
+rendered identically for both — Source through Qty, then Purchase
+Price/Net Amount/VAT Amount/Amount all visible and correct (including the
+Used line's genuine 0.000 VAT), no Model or Storage column present for
+either role. 1a is now fully closed.
 
 **1b (suggested sale price at intake) — planned, not yet reviewed or
 built.** Full plan at `~/.claude/plans/suggested-sale-price-at-intake.md`:
@@ -187,6 +195,14 @@ real data, both columns correctly reappear (15 columns) for both roles;
 test data then cancelled and deleted with zero residue, same manifest
 discipline as the 1a verification above. `purchase_report.py` compiles
 clean and the live site was restarted and confirmed responding afterward.
+
+**Real browser click-through done the same session, alongside 1a's**:
+`/app/query-report/Purchase%20Report` as both real accounts
+(`clashams4@gmail.com`, `msadmin.test@mobileshop.local` — the second
+confirmed via `/app/user-profile` after an initial mis-login landed on
+`Administrator` and was caught and redone) shows no Model or Storage
+column for either role against the current all-Purchase-Voucher data,
+matching the API check exactly.
 
 **Not committed to git** — this session's worktree isolation is scoped to
 the outer, doc-only repo (`~/Documents/Work/mobile_shop`), and git
