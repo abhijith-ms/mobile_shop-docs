@@ -69,9 +69,12 @@ open questions above, which are still unanswered) — full detail in
 PROJECT_PLAN.md's "Accounting & POS Feature Set — Phase Plan" section: ten
 feature requests plus follow-up answers, a settled bespoke/GL-ready
 accounting architecture decision (Hard Rule 20), and a Phase 1–6 build
-sequence. See PROJECT_PLAN.md for items 1c (live POS VAT display) and 1d
-(recent sales in POS), each still gated behind its own plan-before-code
-cycle once the items ahead of it are browser-verified.
+sequence. **Phase 1 items 1a, 1b, and 1c are now done** (see their own
+entries below). **1d (recent sales in POS) is next and not yet planned**
+— per PROJECT_PLAN.md it's open-ended: how many, what columns, panel vs.
+dialog, and whether the existing void-last-sale feature's recent-sale
+state should be reused rather than adding a parallel lookup. Same
+plan-before-code cycle as the rest of Phase 1.
 
 **1a (Purchase Report VAT columns, commit `21839d6`) — fully closed
 2026-09-02, including the real browser click-through.** Re-verified:
@@ -176,11 +179,53 @@ data cleaned up via manifest, zero residue, real data (`PV-00001/4/5`, the
 real `8534578896` batch and its backfilled lot) confirmed unchanged
 throughout.
 
-**Not yet merged into `develop`** — committed on branch
-`worktree-hashed-sparking-naur` in `apps/mobile_shop` (one commit ahead of
-`develop` at the time), same isolation constraint as 1a: `git merge
---ff-only worktree-hashed-sparking-naur` from a normal session against
-`apps/mobile_shop` merges it in.
+Merged into `develop` the same day (commit `f96c4b3`, pushed to origin).
+
+**1c (live VAT display in POS on Exclusive) — built and verified
+2026-09-02, commit `c7a46ed` in `apps/mobile_shop`, pushed directly to
+`origin/develop`.** Full design at
+`~/.claude/plans/pos-live-vat-display.md`. Accountant meeting item 2: show
+VAT live in the cart, not just on the printed invoice. New whitelisted
+`preview_totals()` reuses `calculate_standard_vat()` unchanged — no VAT
+math duplicated in JavaScript, matching this app's standing convention.
+**Scope widened on review to cover both Inclusive and Exclusive**, not
+just Exclusive as the accountant's literal ask first scoped it to — same
+endpoint, no design change.
+
+**PMS (Used-phone) carts never show a live breakdown, in either VAT
+mode** — not a scope simplification, the same NBR rule already enforced
+on the printed PMS invoice ("must not show the VAT amount"), extended to
+the live screen. `validate_no_pms_standard_mix` already guarantees a cart
+is either 100% PMS or 100% Standard, so the client-side Used-phone check
+alone is sufficient. Confirmed safe to expose despite `Shop
+Sale.total_vat_amount` itself being permlevel 1: `preview_totals` never
+reads that stored field, and `calculate_standard_vat()` takes no
+purchase_price/margin input at all, so nothing margin-sensitive can be
+derived from it regardless of what a caller sends — the field is only
+sensitive because it aggregates PMS lines too, where VAT genuinely is
+margin-derived, which this endpoint never computes.
+
+Debounced (~300ms), non-fatal on failure (falls back to the plain
+Subtotal that was already there), with a sequence guard against a stale
+response overwriting a newer render.
+
+Verified via the real API as Staff: `preview_totals` correctness in both
+VAT modes, single and multi-line; the preview matches a real submitted
+Shop Sale's actual `total_vat_amount`/`total_charged` exactly. Live
+browser pass: typed a real price on a real in-stock phone, watched
+Net/VAT/Total appear and update correctly in both Inclusive and
+Exclusive; confirmed a real (temporarily created) Used-phone cart shows
+no breakdown and fires no network call in either mode. All test data
+cleaned up — including restoring a real accessory item's stock that a
+force-deleted test sale had left short by 2 units (force-delete bypasses
+`on_cancel`, which a real cancel would have handled), confirmed back to
+its real value afterward.
+
+**Hit Hard Rule 13 again, with a new wrinkle worth adding to it**: `bench
+clear-cache` alone did not clear the stale POS page script this time — the
+browser's own `localStorage` also had to be cleared
+(`localStorage.clear(); sessionStorage.clear();`) before a fresh page load
+picked up the new JS. See Hard Rule 13's update below.
 
 **Purchase Report's blank Model/Storage columns — investigated
 2026-09-02, not a bug, needs a scoping decision.** Every live row in
@@ -1534,6 +1579,21 @@ Set — Phase Plan" section):
     hinted at it. When a verified-correct Page JS edit doesn't show up
     live, reach for `bench clear-cache` before suspecting the browser or
     the edit itself.
+
+    **Update 2026-09-02 — `bench clear-cache` is necessary but was not
+    sufficient this time.** Hit while building 1c: confirmed server-side
+    via a direct `frappe.desk.desk_page.get()` call (bypassing the browser
+    and any HTTP layer entirely) that the correct new script was really
+    being served — and the browser was STILL rendering the old one, even
+    after `clear-cache`, `clear-website-cache`, and a `Ctrl+Shift+R` hard
+    reload. The fix was clearing the browser's own `localStorage` (`
+    localStorage.clear(); sessionStorage.clear();` via devtools, then a
+    fresh page load) — Frappe's desk client caches fetched page scripts
+    client-side across sessions, and a hard reload only bypasses HTTP
+    cache, not `localStorage`. When the server-side check above proves the
+    correct script is being served but the browser still shows the old
+    one, the browser's `localStorage` is the next place to look, not
+    another round of server-side cache-clearing.
 
 14. **The `Administrator` account bypasses every permission check
     unconditionally — testing "as Admin" using it does NOT verify what the
