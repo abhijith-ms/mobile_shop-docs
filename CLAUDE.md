@@ -1841,6 +1841,41 @@ Set — Phase Plan" section):
     entries from these rows, since they won't have been accruing natively
     from day one.
 
+21. **Never force-delete a document that has stock or provenance side
+    effects — cancel it properly first, every time, even in test-data
+    teardown.** `frappe.delete_doc(..., force=True)` (or deleting a
+    submitted doc after a raw-SQL `docstatus = 2` drop) skips `on_cancel`
+    entirely, and `on_cancel` is where this app's reversal logic lives —
+    see Hard Rule 16. Hit for real during 1c verification (2026-09-02): a
+    force-deleted test Shop Sale left a real accessory `Item.current_stock`
+    short by 2 units, because `Item Sale Line`'s decrement was never
+    reversed. Caught and fixed by hand that session, but it is a standing
+    hazard for every teardown on this app, not a one-off — any submittable
+    doctype whose `on_submit` mutates something else (`Phone.status`,
+    `Item.current_stock`, `Phone Batch.untracked_qty`, and any future
+    payment-side balance under Hard Rule 20) is exposed the same way.
+
+    The only exception this project has knowingly taken is the
+    2026-07-25 full test-data wipe, and that's instructive rather than a
+    counterexample: it dropped every affected doc to `docstatus = 2` via
+    raw SQL specifically *because* the whole reference graph — transactions
+    and the masters they touched — was being removed together in one pass,
+    with every affected counter re-verified at 0 by independent `COUNT(*)`
+    afterward, not trusted from the teardown script's own report. That is
+    not a template for routine cleanup; it is what it takes to safely
+    bypass `on_cancel` on purpose, and it should stay rare.
+
+    **The rule for ordinary teardown**: `doc.cancel()` first — let the real
+    `on_cancel`/`before_cancel` logic run and reverse whatever it reversed
+    on submit — then delete. If a cancel is blocked, that block is telling
+    you the document has real history (a sold phone, drained stock); fix
+    the underlying state or leave the document in place, don't route around
+    the block with a force-delete. Combine with Hard Rule 18: track what
+    you created in a manifest, cancel-then-delete from that manifest, and
+    verify the side-effect counters (stock, `untracked_qty`, `Phone.status`)
+    independently afterward rather than trusting the teardown script's own
+    account of what it did.
+
 ## Verification discipline — do not skip this
 
 After any migrate, DO NOT assume a fix worked just because the command
@@ -2085,9 +2120,17 @@ just not yet started. See "Open items" above for current status of each.
   Same caveat as a bench console session applies either way: neither
   shares a real request's commit/rollback wrapper, so test data written
   without an explicit `frappe.db.commit()` silently never persists.
-- Two git repos exist: this inner one (`apps/mobile_shop/`) is the one that
-  matters and has real commit history. An outer repo at
-  `~/Documents/Work/mobile_shop/` is mostly unused — don't worry about it.
+- Two git repos exist, and both matter, for different things. The inner
+  repo (`apps/mobile_shop/`) is the actual app source — code changes,
+  doctypes, reports, print formats — with its own remote
+  (`github.com/abhijith-ms/mobile_shop.git`, branch `develop`). The outer
+  repo at `~/Documents/Work/mobile_shop/` (this directory) holds the
+  project's own docs — `CLAUDE.md` and `PROJECT_PLAN.md` — is actively
+  committed to every session, and has its own remote
+  (`github.com/abhijith-ms/mobile_shop-docs.git`, branch `master`).
+  **Doc updates belong in the outer repo, code changes in the inner
+  one** — don't write session notes into the inner repo or code into the
+  outer one.
 - Camera-scanning features require HTTPS or localhost (browser restriction).
   Use an ngrok tunnel for testing on a real device:
   `ngrok http 8000 --host-header="mobileshop.local:8000"`
