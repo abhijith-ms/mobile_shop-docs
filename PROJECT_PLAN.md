@@ -570,11 +570,24 @@ Items 1, 2, 3, 7. Build order within the phase: **1a first** (smallest).
 - **1c — Live VAT display in POS on Exclusive (item 2).** Display-only. The
   calculation already exists and is verified correct — reuse it, do not
   reimplement.
-- **1d — Recent sales in POS (item 3).** Confirmed as recent sales (not
-  recent items or customers). Open in its own plan: how many, what columns,
-  panel vs. dialog, and whether tapping one does anything. The existing
-  void-last-sale feature already touches recent-sale state — check whether
-  this should reuse or extend it rather than adding a parallel lookup.
+- **1d — Quick-select product panel in POS (item 3).** Scope corrected
+  2026-09-02: this is NOT a recent-sales log (that was the original
+  meeting framing) — it is a quick-select panel of top-selling *products*
+  so staff can add common items to the cart fast, ranked by frequency over
+  a rolling 7-day window and filtered by sellable stock. 5 entries,
+  always-visible panel (not a dialog), products only (no time/customer/
+  total columns). Accessories are the priority case; phones are included
+  by model (not unit — units are IMEI-unique), and tapping a phone-model
+  tile prompts for IMEI selection before adding to cart, a visibly
+  different tap behavior from an accessory tile's straight-to-cart add.
+  Confirmed by reading the code: the void-last-sale feature's recent-sale
+  state (`this.last_sale`) is a single completed *sale document*, not a
+  product ranking, so this is a separate lookup, not a reuse or extension
+  of that state. Full design, including where the ranking query lives, its
+  per-load cost, how sellable stock is determined for both accessories and
+  batch-tracked phone models, and the coexistence with the existing
+  all-time "Browse Accessories" panel, at
+  `~/.claude/plans/quick-select-product-panel-pos.md`.
 
 ### Phase 2 — bespoke `Bank` master
 
