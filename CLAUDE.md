@@ -105,20 +105,50 @@ open the report as both accounts and eyeball it before 1a is fully closed.
 **1b (suggested sale price at intake) — planned, not yet reviewed or
 built.** Full plan at `~/.claude/plans/suggested-sale-price-at-intake.md`:
 new `suggested_sale_price` field on `Phone`, `Purchase Voucher Phone Line`,
-and `Phone Batch` (mirrors `last_purchase_price`'s overwrite-on-restock
-pattern for the batch case); flows through `create_phone_record()`,
-`add_to_phone_batch()`, and `create_phone_from_batch()` exactly like
-`purchase_price` already does; pre-fills the POS cart's price input via a
-`pos_scan()` field addition, replacing today's hardcoded `selling_price: 0`,
-while staying fully editable at the till. **Deliberately permlevel 0
-everywhere, diverging from `Phone.purchase_price`'s permlevel 1** — reasoned
-out explicitly in the plan (not margin-sensitive, Staff already see and
-type the number at both intake and the till). Deliberately does NOT touch
-`Purchase Entry`/`Item Purchase`/`Phone Batch Purchase` — those three are
-historical-only intake forms with no homepage tile, so Phones created
-through them will simply have a permanently blank suggested price, the same
-NULL-not-zero honesty used elsewhere. Needs review before any code is
-written.
+flows through `create_phone_record()` exactly like `purchase_price`
+already does for a captured-IMEI phone line; pre-fills the POS cart's
+price input via a `pos_scan()` field addition, replacing today's
+hardcoded `selling_price: 0`, while staying fully editable at the till.
+**Deliberately permlevel 0 everywhere, diverging from
+`Phone.purchase_price`'s permlevel 1** — reasoned out explicitly in the
+plan (not margin-sensitive, Staff already see and type the number at both
+intake and the till). Deliberately does NOT touch `Purchase
+Entry`/`Item Purchase` — historical-only intake forms with no homepage
+tile, so Phones created through them will simply have a permanently blank
+suggested price, the same NULL-not-zero honesty used elsewhere.
+
+**Batch-price part of the plan reworked 2026-09-02, per explicit
+instruction**: a single `Phone Batch.suggested_sale_price` field that
+overwrites on every restock (the `last_purchase_price` pattern, reached
+for by analogy at first) was rejected — restocking a batch at a new
+suggested price must NOT reprice units already sitting in that batch, only
+newly-received units get the new price, and a scalar field cannot
+represent two prices for anonymous units in the same batch. Reworked to a
+new `Phone Batch Lot` child table (one row per restock: `qty`,
+`remaining_qty`, `suggested_sale_price`, `purchase_date`,
+`source_doctype`/`source_name`), consumed **FIFO** at sale time inside the
+same lock that already decrements `Phone Batch.untracked_qty` — considered
+and rejected letting the cashier pick a price at the till instead, since
+batch units are anonymous by design specifically so staff never have to
+track which physical delivery a shelf unit came from. `Phone Batch
+Purchase` (still fully functional, just no homepage tile) needs one small
+internal touch — it also inserts a blank-priced lot row on submit — or the
+`untracked_qty == SUM(remaining_qty)` invariant breaks the moment both
+intake paths touch the same UPC; **checked against real data before
+writing this** (not assumed): zero `Phone Batch Purchase` documents exist
+in this database ever, so the real `8534578896` batch was created entirely
+by one Purchase Voucher line. A one-time backfill is required before this
+ships, since that same real batch already carries `untracked_qty=22` with
+zero lot rows today. The rework also makes cancellation strictly more
+precise almost for free: a `phone_batch_lot` reference field lets
+`reverse_phone_line()`/`reverse_purchase()` check the exact lot a document
+created instead of the whole pool, with the existing pool-based check kept
+as a fallback for pre-existing documents that predate the field. Full
+design, including the "why FIFO" reasoning and the full verification plan,
+in the plan file. Everything else in the plan (Phone/Purchase Voucher
+Phone Line fields, Path A, the permlevel decision, POS pre-fill for
+non-batch phones) is unchanged and approved as written. Needs review
+before any code is written.
 
 **Purchase Report's blank Model/Storage columns — investigated
 2026-09-02, not a bug, needs a scoping decision.** Every live row in
@@ -138,13 +168,33 @@ in `purchase_report.py`), while the Purchase Entry and Phone Batch Purchase
 branches correctly select real `model`/`storage` values — confirmed via the
 1a test data above (both test records were entered with distinct
 model/storage values and read back correctly by the report's SQL for those
-two branches). So nothing is miswired and nothing needs fixing in the
-report itself; the report is correctly surfacing a pre-existing intake gap.
-The open decision (unchanged from when it was first flagged, just now
-visibly affecting Purchase Report too): leave it as-is, or have
-Purchase/Sales/Inventory Report's Model column and filter fall back to
-parsing/searching the free-text `brand` field. Not decided; do not "fix"
-Purchase Report unilaterally.
+two branches). So nothing was miswired and the underlying data was never
+touched; the report was correctly surfacing a pre-existing intake gap.
+
+**Decided 2026-09-02: leave the underlying data alone (no parsing the
+free-text `brand` field — too fragile), and hide the Model/Storage columns
+entirely when every row in the current result set would be blank for that
+field.** Built and verified the same day: `get_columns()` now takes `data`
+and only appends the Model/Storage column definitions when at least one
+row has a non-blank value for that field (`execute()` reordered to compute
+`data` before `columns` accordingly). Verified via the real
+`query_report.run()` entrypoint as both real accounts
+(`clashams4@gmail.com`, `msadmin.test@mobileshop.local`): with the current
+all-Purchase-Voucher data both columns are correctly absent (13 total
+columns instead of 15) for both roles; with one manifest-tracked test
+Purchase Entry carrying real model/storage values submitted alongside the
+real data, both columns correctly reappear (15 columns) for both roles;
+test data then cancelled and deleted with zero residue, same manifest
+discipline as the 1a verification above. `purchase_report.py` compiles
+clean and the live site was restarted and confirmed responding afterward.
+
+**Not committed to git** — this session's worktree isolation is scoped to
+the outer, doc-only repo (`~/Documents/Work/mobile_shop`), and git
+operations against the inner `apps/mobile_shop` repo (where this file
+actually lives) are blocked from inside that isolation. The file on disk
+at `mobile_shop/mobile_shop/report/purchase_report/purchase_report.py` is
+the real, working, verified change — `git add`/`git commit` it from a
+normal (non-isolated) session.
 
 The report follow-up phase that used to sit here is **done** (2026-07-29,
 see below): `Purchase Report` and `Supplier Report` now read every
