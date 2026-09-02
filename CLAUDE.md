@@ -1577,15 +1577,21 @@ urgent, none to be decided unilaterally:
 feature set** (full detail in PROJECT_PLAN.md's "Accounting & POS Feature
 Set — Phase Plan" section):
 
-- **Frontend vs. backend sequencing is unresolved.** Phases 3–6 of the new
-  accounting work (money in/out, the three registers) build Desk-side forms
-  that the planned custom React frontend would then need to re-implement.
-  Whether the accounting layer or the frontend rebuild goes first has not
-  been decided — do not assume Desk is the permanent target, and do not
-  pick an order unilaterally.
+- **Frontend vs. backend sequencing is SETTLED, not open** (2026-09-02,
+  listed here only so it isn't mistaken for a pending decision going
+  forward): Phase 3 is built on the existing Desk/POS UI, with
+  deliberately minimal, disposable cart-JS for payment capture — not the
+  planned custom React frontend. The React POS rebuild is deferred as its
+  own independently-scoped, behavior-preserving migration that will pick
+  up Phase 3's payment capture at that point rather than bundling a stack
+  migration with a brand-new feature on day one. Full reasoning at
+  `~/.claude/plans/frontend-vs-backend-sequencing-decision.md`; the
+  short version is that Phase 3's *backend* is fully UI-agnostic either
+  way (consumed through whitelisted methods any UI calls the same way),
+  so only the payment-capture screen itself was ever actually in question.
 - **The accounting layer's architecture is SETTLED, not open** — listed
   here only so it isn't mistaken for a pending decision: fully bespoke,
-  GL-ready `Bank` master + payment child table, deliberately NOT ERPNext's
+  GL-ready `Shop Bank` master + payment child table, deliberately NOT ERPNext's
   native `Bank Account`/`Mode of Payment`/`Payment Entry`. Full reasoning in
   PROJECT_PLAN.md. Before ever proposing "just use ERPNext's native Payment
   Entry" here, read that reasoning — it was already weighed and rejected

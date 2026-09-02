@@ -627,9 +627,24 @@ Last, deliberately. Receivable is only meaningful once item 10 exists;
 Payable only once item 6 does. Building earlier would ship a dashboard tile
 showing two permanent zeros.
 
-## Open question — not decided yet
+## Frontend vs. backend sequencing — SETTLED 2026-09-02
 
-**Frontend vs. backend sequencing.** Phases 3–6 build Desk-side forms that
-the planned custom React frontend would then need to re-implement. Whether
-the accounting layer or the frontend rebuild goes first is unresolved.
-Record it as open — do not assume Desk is the permanent target.
+Phases 3–6 build Desk-side forms that the planned custom React frontend
+(Doppio-scaffolded Vite + React + TypeScript + shadcn/ui, phased scaffold+
+auth → POS rebuild → dashboard/reports → Purchase Voucher entry →
+remaining screens) would eventually need to re-implement. Previously
+recorded as unresolved; decided on explicit sign-off: **Phase 3 is built
+on the existing Desk/POS UI**, with deliberately minimal, knowingly
+disposable cart-JS for the payment-capture widget — not the polished,
+permanent kind of UI investment. The React POS rebuild is deferred as its
+own independently-scoped, behavior-preserving migration, and will pick up
+Phase 3's payment capture at that point as just another part of what the
+POS already does, rather than bundling a stack migration with a brand-new,
+compliance-sensitive feature on day one of the rewrite.
+
+Full reasoning at `~/.claude/plans/frontend-vs-backend-sequencing-decision.md`
+(the money-fact: Phase 3's *backend* — the payment child table, `validate()`
+rules, permissions, Hard Rule 20's field contract — is fully UI-agnostic
+regardless of this decision, since it's consumed through whitelisted
+methods either UI calls the same way; only the payment-capture screen
+itself was ever actually in question).
