@@ -71,7 +71,117 @@ feature requests plus follow-up answers, a settled bespoke/GL-ready
 accounting architecture decision (Hard Rule 20), and a Phase 1–6 build
 sequence. **All four Phase 1 items (1a, 1b, 1c, 1d) are now done** (see
 their own entries below) — **Phase 1 is fully closed as of 2026-09-02**.
-Phase 2 (bespoke `Bank` master) is next, not yet started, not yet planned.
+**Phase 2 (bespoke `Shop Bank` master) is now built and API-verified as of
+2026-09-02** (3 commits, `c3818fd`..`418e1f9`, on branch
+`worktree-shop-bank-phase2` in `apps/mobile_shop` — not yet merged to
+`develop`, not yet pushed; see that section's closing note for why).
+Full plan at `~/.claude/plans/bespoke-bank-master.md`. Phase 3 (money
+in/payment capture) is next, not yet started, not yet planned — and per
+that plan's own flag, should not start until the open frontend-vs-backend
+sequencing question (see "Do not start without explicit confirmation"
+below) is actually settled, not just because Phase 2 finished.
+
+**A real naming collision was caught before any code was written**:
+PROJECT_PLAN.md and this file both called this "a bespoke `Bank` master."
+Naming the doctype literally `Bank` would have reproduced the Hard Rule 10
+`Customer` collision exactly — ERPNext ships its own core `Bank` doctype
+(`erpnext/accounts/doctype/bank/bank.json`), and `Bank Account` and `Mode
+of Payment` (both already named in the architecture decision as things
+being deliberately avoided) are also core doctype names, confirmed by
+grepping `apps/frappe`/`apps/erpnext` directly rather than assuming. Built
+as **`Shop Bank`** instead — no collision, and it follows this app's
+existing `Shop Sale`-style naming for a bespoke doctype standing in for an
+ERPNext-core concept.
+
+Fields are exactly the four scoped, nothing added: `bank_name` and
+`account_number` (Data, both `reqd`+`unique`), `is_default` and
+`disabled` (Check). Naming is a plain `BANK-.#####` series, deliberately
+**not** `autoname: field:bank_name` the way `Phone Batch` uses
+`field:upc` — a bank's display name can plausibly get edited later (typo
+fix, a fuller legal name), and decoupling the docname from that avoids
+ever needing Frappe's Link-rename cascade for a small config master that
+Phase 3/4 payment rows and the eventual Phase A GL migration will
+reference by name.
+
+**Permissions, decided deliberately rather than by the project's usual
+Staff-create/Admin-corrects analogy**: the accountant meeting is explicit
+that "banks are an admin-managed list," so `Mobile Shop Admin` + `System
+Manager` get full CRUD and `Mobile Shop Staff` gets `read` only — no
+`write`, `create`, or `delete`. This is a brand-new doctype fully owned by
+`mobile_shop` (permissions live in `shop_bank.json`'s own `permissions`
+array), not a `Custom DocPerm` addition to a core doctype, so Hard Rule
+15's "any Custom DocPerm row wipes every other role's standard access"
+trap does not apply here.
+
+**The plan explicitly flagged a follow-up question on this and it was
+checked empirically before building further, not assumed**: does Staff's
+read-only grant give a clean Link-field dropdown/query for Phase 3, or
+does it hit the same kind of gap Hard Rule 15/19 found on Item/UOM? Tested
+directly as the real `clashams4@gmail.com` account via the actual desk
+search endpoints a Link field's dropdown calls
+(`frappe.desk.search.search_widget`/`search_link`) against a real test
+`Shop Bank` row — both returned the row cleanly with no permission error.
+Confirmed via Frappe's own source why: `search_widget` falls back to
+`select` only when a role has no `read` at all; Staff's plain `read: 1`
+already powers the query as a superset, so nothing extra was needed. Also
+confirmed the negative side directly at the document level (not just
+`has_permission`): a real `.save()`, `.insert()`, and `delete_doc()`
+attempt as Staff against `Shop Bank` all raised genuine
+`PermissionError`s.
+
+**`is_default` enforcement, new design (no existing single-default pattern
+elsewhere in this app to reuse)**, in `validate()`/`on_trash()`: the first
+`Shop Bank` ever created auto-becomes default; setting `is_default` on any
+save unsets it on every other row via `frappe.db.set_value`; disabling or
+deleting the *current* default is a hard `frappe.throw`, never a silent
+auto-reassignment — the admin must set a different account as default
+first. One emergent property worth keeping in mind rather than treating as
+a bug: **the sole remaining `Shop Bank` (necessarily the default) can never
+be disabled or deleted** — by design, since a shop with any bank at all
+must always have exactly one enabled default, and there is deliberately no
+"last one" escape hatch. A same-save loophole was tested and confirmed
+closed: unchecking `Is Default` and checking `Disabled` together on the
+sole/current default in one save re-forces `is_default` back on before the
+disable check runs (there's no other default to take over), so that save
+correctly fails instead of silently leaving zero defaults.
+
+Homepage tile added to `home_tiles.py`'s Records section (checked first
+that this is genuinely the live convention: `Item`/`Phone Batch`/etc. only
+ever got a `home_tiles.py` entry, never a shortcut on the older "Mobile
+Shop" Workspace, so no Hard Rule 1 dance was needed).
+
+Verified via the real API as both `clashams4@gmail.com` (Mobile Shop
+Staff) and `msadmin.test@mobileshop.local` (Mobile Shop Admin) — never
+`Administrator`: schema and DocPerm rows correct after two consecutive
+`bench migrate` runs; the Link-query check above; Staff CRUD genuinely
+blocked at the document level; Admin full CRUD; auto-default on first
+create; reassigning default unsets the old one; disable/delete blocked on
+the current default and correctly succeed once a different bank is made
+default first; the sole-remaining-bank case blocked as designed; the
+same-save loophole blocked and self-healed; homepage tile visible to both
+roles via the real `get_homepage_tiles()` call, with `+ Add` present for
+Admin only. All test `Shop Bank` rows cleaned up, confirmed back to 0 rows
+independently afterward — one disclosed teardown wrinkle: deleting a
+manifest-tracked test row that ends up being the last bank standing needs
+its `is_default` cleared via a direct `frappe.db.set_value` first, since
+normal delete is permanently blocked by design for a sole default record;
+this is a real, repeatable step for tearing down `Shop Bank` test data
+going forward, not a one-off. No live-server browser pass yet — this
+session had no running `bench start` process to drive one against; the
+API-level verification above is what's done, and a browser pass is the
+right next check before Phase 3 begins.
+
+**Not merged to `develop`, not pushed, on explicit instruction.** Commits
+live only on `worktree-shop-bank-phase2` in `apps/mobile_shop` pending the
+user's review — a deliberate departure from every earlier phase in this
+project (1a–1d were all merged and pushed the same session), because this
+session was asked not to go past what the worktree-isolation setup itself
+allows without the user seeing it first. The live site's working files
+were brought up to date with this branch's tip so the verification above
+could run against the real bench and site, but that is a local, uncommitted
+mirror of the same commits — not a separate change, and not something to
+build on top of without first bringing the actual git state (merge/push)
+in line with it.
 
 **1a (Purchase Report VAT columns, commit `21839d6`) — fully closed
 2026-09-02, including the real browser click-through.** Re-verified:
@@ -2038,11 +2148,11 @@ but it actually collides with ERPNext's core Customer doctype of the same
 name and currently overrides it. See Hard Rule 10 before assuming either
 description is accurate.)
 
-**Custom doctypes** (13, as of 2026-07-28 — this list was long out of date;
+**Custom doctypes** (14, as of 2026-09-02 — this list was long out of date;
 verify with `frappe.get_all("DocType", filters={"module": "Mobile Shop"})`
 rather than trusting any prose):
 
-- Masters: `Phone`, `Customer`, `Phone Batch`
+- Masters: `Phone`, `Customer`, `Phone Batch`, `Shop Bank`
 - Sale side: `Shop Sale` + children `Phone Sale Item`, `Item Sale Line`;
   `Sales Entry` (historical only, superseded by Shop Sale)
 - Intake: `Purchase Voucher` + children `Purchase Voucher Phone Line`,
