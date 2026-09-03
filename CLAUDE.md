@@ -1740,6 +1740,23 @@ Set — Phase Plan" section):
   custom-React-frontend payoff argument). See Hard Rule 20 for the field
   contract that keeps this decision cheap to migrate later.
 
+**Added 2026-09-03, from Phase 4 — a real inconsistency, flagged for a
+future conscious decision, not fixed here**: `Shop Sale`/`Customer
+Receipt`'s `get_outstanding_balance()` (Phase 3) reads the sale's
+outstanding balance with a plain, unlocked `frappe.db.sql()` — two
+Customer Receipts submitted against the same sale at the exact same
+instant could both read a stale figure and together overpay.
+`Purchase Voucher`/`Payment Voucher`'s `get_outstanding_purchase_balance()`
+(Phase 4) closes the identical race with a `SELECT ... FOR UPDATE` lock
+on the Purchase Voucher's own row before summing — added deliberately in
+Phase 4, not retrofitted onto Phase 3. The two now behave differently
+under concurrency for what is otherwise the same shape of check. Left
+this way on purpose rather than silently carried forward: either
+retrofit the lock onto Shop Sale's version, or accept the asymmetry
+permanently, is a real choice someone should make deliberately - not
+something Phase 5/6 should rediscover by accident while building
+Receivable/Payable on top of both queries.
+
 ## Hard rules — these came from real bugs, don't relearn them the hard way
 
 1. **Workspace and Number Card are "standard" doctypes.** They sync from
