@@ -71,19 +71,24 @@ feature requests plus follow-up answers, a settled bespoke/GL-ready
 accounting architecture decision (Hard Rule 20), and a Phase 1–6 build
 sequence. **All four Phase 1 items (1a, 1b, 1c, 1d) are now done** (see
 their own entries below) — **Phase 1 is fully closed as of 2026-09-02**.
-**Phases 2, 3, and 4 (bespoke `Shop Bank` master; money in/payment
-capture; money out/Payment Voucher — 2026-09-02/03) are all done, merged
-to `develop`, and pushed.** Phase 2 was 3 commits (`c3818fd`..`418e1f9`,
-plan at `~/.claude/plans/bespoke-bank-master.md`); Phase 3 was 4 commits
-(`932e9c7`..`e265899`, plan at `~/.claude/plans/phase3-payment-capture.md`);
-Phase 4 was 6 commits (`41f053d`..`849df64`, plan at
-`~/.claude/plans/plan-phase-4-lively-lobster.md`) — full detail on each in
-their own entries below. Phase 5 (the registers — Daybook, Cash Book,
-Bank Book) is next, not yet started, not yet planned. The frontend-vs-
-backend sequencing question that once gated Phase 3 is settled (see "Do
-not start without explicit confirmation" below) — Phase 3 was built on
-the existing Desk/POS UI per that decision, and Phase 4 followed the same
-convention (a plain Desk form, no custom JS needed at all).
+**Phases 2 through 5 (bespoke `Shop Bank` master; money in/payment
+capture; money out/Payment Voucher; the registers — 2026-09-02/03) are
+all done, merged to `develop`, and pushed.** Phase 2 was 3 commits
+(`c3818fd`..`418e1f9`, plan at `~/.claude/plans/bespoke-bank-master.md`);
+Phase 3 was 4 commits (`932e9c7`..`e265899`, plan at
+`~/.claude/plans/phase3-payment-capture.md`); Phase 4 was 6 commits
+(`41f053d`..`849df64`, plan at
+`~/.claude/plans/plan-phase-4-lively-lobster.md`); Phase 5 was 5 commits
+(`37e5518`..`cf0fa42`, plan at `~/.claude/plans/phase5-registers.md`) —
+full detail on each in their own entries below. Phase 6 (Receivable/
+Payable on the homepage, reusing Phase 3/4's outstanding-balance queries)
+is next, not yet started, not yet planned. The frontend-vs-backend
+sequencing question that once gated Phase 3 is settled (see "Do not start
+without explicit confirmation" below) — Phase 3 was built on the existing
+Desk/POS UI per that decision, Phase 4 followed the same convention (a
+plain Desk form, no custom JS needed at all), and Phase 5 is three plain
+Script Reports, the same UI-agnostic shape every other report in this app
+already has.
 
 **A real naming collision was caught before any code was written**:
 PROJECT_PLAN.md and this file both called this "a bespoke `Bank` master."
@@ -474,6 +479,120 @@ cleaned up via cancel-then-delete in correct dependency order, zero
 residue confirmed independently each time - real Purchase Vouchers
 (`PV-00001/4/5/9`) and Shop Sale count confirmed unchanged throughout.
 Stable across two migrates per commit.
+
+**Phase 5 (the registers — items 8 + 9, Daybook/Cash Book/Bank Book) —
+built, verified, merged to `develop`, and pushed, 2026-09-03.** 5 commits
+(`37e5518`..`cf0fa42`), full plan and design reasoning at
+`~/.claude/plans/phase5-registers.md`. "Pure read layers over Phases 3
+and 4" exactly as PROJECT_PLAN.md described - no doctype changes, three
+new Script Reports plus one new shared `mobile_shop/utils/registers.py`
+helper, additive only.
+
+**A load-bearing technical fact confirmed before designing any query, not
+assumed**: `Payment Line` rows physically live in one shared table across
+all four parent doctypes (`Shop Sale`, `Customer Receipt`, `Purchase
+Voucher`, `Payment Voucher`). Traced through Frappe's own source
+(`Document.set_docstatus()` propagates the parent's docstatus onto every
+child row via `get_all_children()`, called on insert/submit/cancel) and
+then confirmed with a real test document - a fresh Shop Sale's payment
+line read back as `docstatus` 0/1/2 through draft/submit/cancel exactly
+as expected. This means a single `WHERE docstatus = 1` filter on
+`tabPayment Line` correctly covers all four sources at once, with no
+4-way UNION/JOIN back to each parent needed - genuinely simpler than
+Phase 3/4's outstanding-balance queries, which need the JOIN specifically
+because they're answering "how much does this one document still owe,"
+not "did this row's parent ever get submitted."
+
+**The accountant meeting's flagged "sanity check" on Staff visibility -
+resolved by construction, not re-litigated.** The meeting answered these
+three are Staff-visible, but flagged that a register reads closer to a
+financial statement than the purchase-side reports Hard Rule 3 already
+settled. Checked directly: every column any of the three reports reads
+comes from `Payment Line`'s own fields, all permlevel 0 since Phase 3 -
+none of Hard Rule 3's actual permlevel-1 fields
+(`Phone.purchase_price`, `margin`/`vat_amount`/`net_profit`) are ever
+touched. Verified empirically too, not just asserted: via the real
+`frappe.desk.query_report.run()` entrypoint, confirmed no permlevel-1
+field name ever appears in any of the three reports' columns, for either
+role.
+
+**`mobile_shop/utils/registers.py`** - `get_payment_line_rows()` (the
+single-query fetch above, `mode_of_payment` accepting one value or a
+list so Cash Book's `= 'Cash'` and Bank Book's
+`IN ('Card', 'Benefit Pay')` share one function),
+`apply_running_balance()`, `compute_opening_balance()`.
+
+**A real precision question, checked explicitly before building further,
+per direct instruction - BHD's fils precision has no room for silent
+drift in a long-running register.** `apply_running_balance()` rounds the
+running balance to 3dp after *every* row, not just the final total - two
+already-3dp values can still produce a tiny binary-float representation
+error on addition, the same class of thing Purchase Voucher's
+`calculate_amounts()` already documents for VAT math ("round per line
+rather than once at the end"). Rounding only the end result would let
+that compound silently across however many rows a register holds.
+`compute_opening_balance()` deliberately reuses this same function rather
+than a second accumulation loop or a SQL-side `SUM` - the latter was
+considered and rejected after confirming empirically, not assumed, that
+`frappe.db.sql()` converts a `decimal(21,3)` column's result to a plain
+Python `float` regardless of the column's real exact type (`SHOW COLUMNS`
+confirmed `paid_amount` really is `decimal(21,3)`; a raw `SUM` query
+still came back as a `float` object) - so a SQL `SUM` wouldn't actually
+avoid anything the correctly-rounded Python accumulation doesn't already
+handle, and would risk the opening and running balances quietly using two
+different rules that could drift apart later. **Proven empirically, not
+just reasoned through**: a 500-row synthetic stress test using amounts
+known to expose binary-float error (0.001/0.002/0.003-scale fils values)
+under naive accumulation, alternating In/Out - every single row's
+running balance, not just the final one, matched an independently
+computed `decimal.Decimal` ground truth exactly.
+
+**Three separate Script Reports** (matching this app's own convention -
+Purchase Report/Accessory Purchase Report/Supplier Report never
+collapsed into one parameterized report either), all Staff-visible, all
+`ref_doctype: "Shop Sale"` purely as a homepage-tile permission gate
+(the same pattern `Sales Report` already uses with `Sales Entry` despite
+also reading `Shop Sale` data).
+
+- **Daybook** - the full activity log, no method restriction, both
+  directions, every source. Deliberately no running-balance column -
+  blending Cash/Card/Benefit Pay/Credit into one cumulative total
+  wouldn't represent any single real account, and Credit specifically is
+  deferred value, not money that moved. `message` shows Total In/Out/Net
+  for whatever's filtered.
+- **Cash Book** - Cash-only, running Balance via `apply_running_balance()`.
+  `message` states the Opening Balance when From Date is set, and -
+  a real gap caught before shipping, not left implicit - an explicit
+  "starts from zero, no fixed opening balance" statement when From Date
+  is blank, so a Balance column never appears with no stated starting
+  point either way.
+- **Bank Book** - Card/Benefit Pay only. **Supports both a single-account
+  view and a combined multi-bank view**, confirmed directly rather than
+  forcing one: a Bank filter narrows to one real account's ledger and
+  balance; left blank, every `Shop Bank`'s activity combines into one
+  blended balance, with the `message` stating plainly that the blended
+  figure doesn't correspond to any single real account - the tradeoff
+  accepted when choosing to keep the combined view, made visible rather
+  than silent. `message` spells out all four combinations of {Bank set or
+  blank} × {From Date set or blank} explicitly, closing the same kind of
+  gap Cash Book's message had.
+
+Verified throughout via the real `query_report.run()` entrypoint as both
+`clashams4@gmail.com` and `msadmin.test@mobileshop.local`, never
+`Administrator`, confirming **identical** results for both roles every
+time (no permission branching exists in any of the three reports' design,
+per the resolved sanity-check above): real documents built across all
+four `Payment Line` sources on controlled dates; a cancelled document's
+rows correctly absent; Credit appearing in Daybook but never in Cash Book
+or Bank Book; Cash Book's running balance hand-checked exactly across a
+Cash-In sale, a Cash-Out Purchase Voucher intake payment, and a second
+Cash-In sale; Bank Book's single-account view and its combined
+two-real-bank view both hand-checked exactly, including the correct
+"2 account(s)" count in the combined caveat; all four Bank Book message
+combinations confirmed correct. All test data cleaned up via cancel-
+then-delete each round, zero residue confirmed independently - real data
+(5 Shop Sales, 4 Purchase Vouchers) unchanged throughout. Stable across
+two migrates per commit.
 
 **1a (Purchase Report VAT columns, commit `21839d6`) — fully closed
 2026-09-02, including the real browser click-through.** Re-verified:
@@ -2498,8 +2617,9 @@ rather than trusting any prose):
   Entry`, `Item Purchase`, `Phone Batch Purchase` all still fully
   functional but historical-only for new entry
 
-Plus 9 Report doctypes (IMEI History, Sales, Purchase, Accessory
-Purchase, Customer, Supplier, Inventory, Profit, VAT — all built),
+Plus 12 Report doctypes (IMEI History, Sales, Purchase, Accessory
+Purchase, Customer, Supplier, Inventory, Profit, VAT, and Phase 5's
+Daybook/Cash Book/Bank Book — all built),
 3 Number Cards, 2
 Workspaces (`Mobile Shop`, `Mobile Shop Home`), 1 Desk Page
 (`mobile-shop-pos`), 1 Custom HTML Block (the homepage launcher — **lives

@@ -506,6 +506,14 @@ architecture decision below without new information from the client.
 > the registers actually expose before building them — a Daybook or Bank
 > Book is closer to a full financial statement than a purchase report is.
 
+**Sanity check done, 2026-09-03, as part of Phase 5** — resolved by
+construction, not just asserted: all three registers read only `Payment
+Line`'s own permlevel-0 fields, so none of them ever touch a Hard Rule 3
+permlevel-1 field regardless of how the data is aggregated over time.
+Verified via the real report entrypoint that no such field ever appears
+in any of the three reports' columns for either role. See CLAUDE.md's
+Phase 5 entry.
+
 ## Architecture decision — SETTLED
 
 **Fully bespoke, designed GL-ready.** The accounting layer will NOT use
@@ -649,10 +657,25 @@ section and `~/.claude/plans/plan-phase-4-lively-lobster.md`.
 
 ### Phase 5 — the registers (items 8, 9)
 
-Daybook, Cash Book, Bank Book. Pure read layers over Phases 3 and 4 — they
-cannot be built earlier because the data does not exist yet. Each payment
-child row is already a register line. Cash Book and Bank Book are the same
-query filtered by method, with running balances.
+**Done, 2026-09-03, merged and pushed** (5 commits, `37e5518`..`cf0fa42`).
+Full design and verification detail in CLAUDE.md's "Current state"
+section and `~/.claude/plans/phase5-registers.md`.
+
+- Daybook, Cash Book, Bank Book — pure read layers over Phases 3 and 4,
+  as planned, additive only (three new Script Reports plus one shared
+  `registers.py` helper, no doctype changes). Each `Payment Line` row is
+  a register line, confirmed to require no per-source UNION/JOIN since
+  Frappe mirrors a child row's `docstatus` onto the parent's automatically.
+  Cash Book and Bank Book share one running-balance query, filtered by
+  method, exactly as planned.
+- One real scope addition Bank Book needed beyond the original one-line
+  description: it supports both a single-`Shop Bank` view and a combined
+  multi-bank view, confirmed with the user rather than assumed, since a
+  running balance is only unambiguous for a single real account.
+- The accountant meeting's flagged "sanity check" on Staff visibility for
+  these three is resolved (see CLAUDE.md) — every column comes from
+  `Payment Line`'s own permlevel-0 fields, nothing Hard Rule 3 marks
+  sensitive.
 
 ### Phase 6 — Receivable / Payable on home (item 5)
 
