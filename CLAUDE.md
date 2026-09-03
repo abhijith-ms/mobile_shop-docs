@@ -71,15 +71,17 @@ feature requests plus follow-up answers, a settled bespoke/GL-ready
 accounting architecture decision (Hard Rule 20), and a Phase 1–6 build
 sequence. **All four Phase 1 items (1a, 1b, 1c, 1d) are now done** (see
 their own entries below) — **Phase 1 is fully closed as of 2026-09-02**.
-**Phase 2 (bespoke `Shop Bank` master) is now built and API-verified as of
-2026-09-02** (3 commits, `c3818fd`..`418e1f9`, on branch
-`worktree-shop-bank-phase2` in `apps/mobile_shop` — not yet merged to
-`develop`, not yet pushed; see that section's closing note for why).
-Full plan at `~/.claude/plans/bespoke-bank-master.md`. Phase 3 (money
-in/payment capture) is next, not yet started, not yet planned — and per
-that plan's own flag, should not start until the open frontend-vs-backend
-sequencing question (see "Do not start without explicit confirmation"
-below) is actually settled, not just because Phase 2 finished.
+**Phase 2 (bespoke `Shop Bank` master, 2026-09-02) and Phase 3 (money
+in/payment capture, 2026-09-03) are both done, merged to `develop`, and
+pushed.** Phase 2 was 3 commits (`c3818fd`..`418e1f9`, plan at
+`~/.claude/plans/bespoke-bank-master.md`); Phase 3 was 4 commits
+(`932e9c7`..`e265899`, plan at
+`~/.claude/plans/phase3-payment-capture.md`) — full detail on each in
+their own entries below. Phase 4 (Payment Voucher against Purchase
+Voucher, reusing Phase 3's `Payment Line`) is next, not yet started, not
+yet planned. The frontend-vs-backend sequencing question that once gated
+Phase 3 is now settled (see "Do not start without explicit confirmation"
+below) — Phase 3 was built on the existing Desk/POS UI per that decision.
 
 **A real naming collision was caught before any code was written**:
 PROJECT_PLAN.md and this file both called this "a bespoke `Bank` master."
@@ -171,17 +173,156 @@ session had no running `bench start` process to drive one against; the
 API-level verification above is what's done, and a browser pass is the
 right next check before Phase 3 begins.
 
-**Not merged to `develop`, not pushed, on explicit instruction.** Commits
-live only on `worktree-shop-bank-phase2` in `apps/mobile_shop` pending the
-user's review — a deliberate departure from every earlier phase in this
-project (1a–1d were all merged and pushed the same session), because this
-session was asked not to go past what the worktree-isolation setup itself
-allows without the user seeing it first. The live site's working files
-were brought up to date with this branch's tip so the verification above
-could run against the real bench and site, but that is a local, uncommitted
-mirror of the same commits — not a separate change, and not something to
-build on top of without first bringing the actual git state (merge/push)
-in line with it.
+**Update 2026-09-03 — subsequently merged and pushed.** The paragraph
+above described the state as first built: held back on
+`worktree-shop-bank-phase2` pending review, a deliberate departure from
+every earlier phase (1a–1d were merged and pushed the same session) while
+this session's worktree-isolation convention was being worked out. Once
+reviewed, it was fast-forward merged into `develop` and pushed in a later
+turn, the same way every phase before it was - the pending-review posture
+was specific to that one session, not a new standing rule.
+
+**Phase 3 (money in — payment capture, items 4 + 10) — built, verified,
+merged to `develop`, and pushed, 2026-09-03.** 4 commits (`932e9c7`
+scaffold, `874e177` Shop Sale wiring, `a6ff23d` Customer Receipt +
+cancel guard, `e265899` POS cart-JS), full plan and design reasoning at
+`~/.claude/plans/phase3-payment-capture.md`. Built on the settled
+sequencing decision above: the existing Desk/POS UI, not the future
+React frontend.
+
+**Three concerns the plan review flagged were traced from source before
+any code was written, not assumed by analogy** - all three held up:
+
+- **Rollback guarantee for a late throw in `process_sale()`.** Confirmed
+  the actual mechanism rather than trusting `create_phone_from_batch()`'s
+  precedent by resemblance alone: PyMySQL's `Connection.__init__` defaults
+  to `autocommit=False` (checked directly against the version installed
+  in this bench), nothing in `process_sale()`'s call chain ever calls
+  `frappe.db.commit()`, and `frappe/app.py`'s `application()` handler
+  routes any exception escaping a POST request straight to its `finally`
+  block's unconditional `frappe.db.rollback()`. Later re-proven live
+  through the real endpoint (see below), not just from source.
+- **`Payment Line.bank` conditional requirement.** Never `reqd: 1` (Cash/
+  Credit rows have none) - `mandatory_depends_on` (the same mechanism
+  `Purchase Voucher Phone Line.vat_treatment` already uses) as a
+  declarative backstop, plus an explicit row-specific `validate()` message
+  as the real, friendly enforcement - extracted into a shared
+  `mobile_shop/utils/payment_lines.py` helper once `Customer Receipt`
+  needed the identical check, rather than two copies that could drift.
+- **Credit-within-Mixed.** The real risk was a check written as "the
+  sale's only payment method is Credit" instead of `any(row.mode_of_payment
+  == "Credit" for row in payment_lines)` - the former passes a pure-Credit
+  sale but misses a Mixed Cash+Credit sale entirely. Built as the `any()`
+  form from the start and verified with that exact scenario (Mixed
+  Cash+Credit, walk-in customer) both via the API and later live in the
+  browser as both real accounts.
+
+**`Payment Line`** - one shared child doctype for `Shop Sale` now,
+`Customer Receipt` now, and Phase 4's `Payment Voucher` later (per
+PROJECT_PLAN.md's own stated intent to reuse rather than reimplement).
+Fields follow Hard Rule 20's contract using ERPNext's own vocabulary
+(`mode_of_payment`, `paid_amount`, `party`/`party_type`,
+`reference_doctype`/`reference_name`), the last four read-only and
+populated by each parent's own controller. `mode_of_payment` has exactly
+4 real values (Cash/Card/Benefit Pay/Credit) - `"Mixed"` is never a stored
+value anywhere, it's what more than one row of different methods on a
+parent looks like.
+
+**`Shop Sale`** gained a `payment_lines` table plus: field population
+(`direction`/`party_type`/`party`/`reference_doctype`/`reference_name`,
+all knowable at `validate()` time, unlike the phone lines' `phone_type`/
+`margin` which need `process_sale()`'s Phone lookups); the Credit-customer
+`any()` check (document-level, not POS-layer-only, since extending credit
+to `Walk-in Customer` is nonsensical regardless of entry path - same
+reasoning as `validate_no_pms_standard_mix`); and the reconciliation check
+(`sum(payment_lines.paid_amount) == total_charged`, both at 3dp) at the
+**end of `process_sale()`**, after the real total is known, rather than
+duplicating the VAT formulas a second time in `validate()`. Also a new
+unconditional `before_cancel` guard - blocking a cancel when a submitted
+`Customer Receipt` already references the sale - added ahead of the
+existing `has_admin_role()` early-return since it isn't a staff-specific
+restriction (Admin is blocked too), using the default `ValidationError`
+like `validate_no_pms_standard_mix`, not `PermissionError` like the
+staff-window checks below it.
+
+**`Customer Receipt`** (new, submittable) records a later balance payment
+against one Credit sale's outstanding amount. Outstanding balance is a
+**live query** (`get_outstanding_balance()` in `shop_sale.py`: this sale's
+own Credit-mode `Payment Line` rows minus every submitted receipt's rows
+referencing it), deliberately not a stored/denormalized field - avoids a
+second `Phone-Batch.untracked_qty`-shaped invariant needing hand-
+maintenance at every submit/cancel. Direct payoff: **`Customer Receipt`
+needs no `on_cancel` at all** - a cancelled receipt just drops out of the
+query by its own `docstatus`.
+
+**A real finding from testing, not assumed**: `customer` is `fetch_from:
+shop_sale.customer` for UX, plus an explicit `validate()` cross-check
+originally designed as "the real enforcement." Testing a deliberate
+customer-override attempt showed Frappe's `fetch_from` already re-fetches
+and overwrites the field during `insert()`, before the explicit check
+ever runs - the two fields can't actually diverge through the ORM. The
+explicit check is kept as a documented backstop (a future write path that
+bypasses `fetch_from`, or the mechanism itself changing), not the primary
+enforcement it was designed to be - the code comment was corrected to say
+so honestly rather than overclaiming.
+
+**POS cart-JS** (`mobile_shop_pos.js`/`.py`): `create_pos_sale()` gained a
+`payment_lines` param threaded through exactly like `phone_lines`/
+`item_lines`; a small "Payment" panel added to the cart footer (method/
+amount/bank per row, "+ Add Payment", a non-authoritative "remaining"
+auto-fill convenience). **Deliberate deviation from the plan's literal
+wording**: the bank picker is a plain `<select>` from a once-per-load
+`frappe.db.get_list`, not a real per-row `frappe.ui.form.make_control`
+Link widget - payment lines re-render via `.html()` on every edit (the
+same idiom the cart lines already use), so a bound Link control would
+just be destroyed and recreated every time anyway, no cheaper than
+rebuilding a `<select>` and considerably more code. This is the one
+genuinely disposable slice of hand-written JS in this whole phase, per
+the sequencing decision.
+
+**Full verification, both checks the phase wasn't considered closed
+without, done 2026-09-03**:
+
+- **Live browser pass, both real accounts** (confirmed via
+  `/app/user-profile` each time, never `Administrator`). Found and fixed
+  a genuine Hard Rule 13 recurrence along the way: the Payment panel
+  didn't render at all on first load - a stale `_page:mobile-shop-pos`
+  entry in the browser's own `localStorage`, not a code bug (the correct
+  script was already confirmed served server-side via a direct
+  `desk_page.get()` call before touching the browser). Cleared per Hard
+  Rule 13's documented fix. With that cleared: bank `<select>` populates
+  from a real `Shop Bank` row for both roles; "+ Add Payment" and the
+  "remaining" auto-fill work exactly as designed; a real Mixed Cash+Card
+  sale completed through the actual browser UI **for each role**
+  (verified server-side to match the UI exactly, bank included on the
+  Card row); Credit-only + walk-in blocked identically for both roles
+  with the friendly `frappe.msgprint`, never a raw Frappe error; Clear
+  Cart resets cart and payment lines together.
+- **Rollback re-proof through the actual endpoint, not just
+  `create_pos_sale()` in isolation.** Fired a real POST from inside the
+  already-authenticated browser page itself (`fetch()` in the page's own
+  JS context - same origin, same CSRF token the real POS JS uses) with a
+  payload crafted to fail reconciliation only after stock was already
+  decremented. Got a genuine HTTP 417, traceback confirmed it ran through
+  the real `application()` → `frappe.api.handle` → `handler.handle()`
+  path; confirmed via direct DB check afterward that stock, Shop Sale
+  count, and `Payment Line` rows were all exactly unchanged. Then
+  reproduced the same failure **through the literal UI** (manually
+  overriding an auto-filled amount to a wrong value before clicking
+  Complete Sale): `frappe.call()`'s own default error handling showed a
+  clean dialog automatically (the real title + message, no raw stack
+  trace), and the cart stayed fully intact and editable - fixing the
+  amount and retrying completed the sale correctly with stock decremented
+  exactly once, not twice.
+
+All test data across both the build and the two closing checks (Shop
+Sales, Customer Receipts, test Shop Banks) cleaned up via cancel-then-
+delete per Hard Rule 21, with one new wrinkle recorded as Hard Rule 22
+(a self-referential Dynamic Link on `Shop Sale`'s own payment rows blocks
+deletion even after a clean cancel - needs `force=True` on the delete
+call specifically, not the cancel). Zero residue confirmed independently
+each time; real data (5 Shop Sales, real Item stock levels) unchanged
+throughout.
 
 **1a (Purchase Report VAT columns, commit `21839d6`) — fully closed
 2026-09-02, including the real browser click-through.** Re-verified:
@@ -2083,6 +2224,25 @@ Set — Phase Plan" section):
     independently afterward rather than trusting the teardown script's own
     account of what it did.
 
+22. **A document that stores a Dynamic Link pointing at itself blocks its
+    own deletion, even after a clean cancel.** Found tearing down Phase 3
+    test data (2026-09-03): `Shop Sale`'s own `payment_lines` rows carry
+    `reference_doctype`/`reference_name` set to that same Shop Sale (by
+    design - see Hard Rule 20's field contract, and the fact that
+    `Customer Receipt`'s rows need a *different* document's name in that
+    same field is exactly why the field exists at all). Frappe's
+    delete-time link-integrity check (`check_if_doc_is_dynamically_linked`)
+    doesn't special-case a row linking to its own parent - it throws
+    `LinkExistsError` exactly as if some other document referenced it,
+    even after `doc.cancel()` has already run and done its real reversal
+    work. **This is not a Hard Rule 21 violation to work around with
+    `force=True` on the cancel** - it's a distinct, narrower situation:
+    cancel first, for real, then pass `force=True` only to the subsequent
+    `delete_doc` call, purely to get past this specific false positive.
+    If a future teardown hits `LinkExistsError` on a document that just
+    cancelled cleanly, check whether the doc has a self-referential
+    Dynamic Link field before assuming something is wrong.
+
 ## Verification discipline — do not skip this
 
 After any migrate, DO NOT assume a fix worked just because the command
@@ -2154,13 +2314,15 @@ but it actually collides with ERPNext's core Customer doctype of the same
 name and currently overrides it. See Hard Rule 10 before assuming either
 description is accurate.)
 
-**Custom doctypes** (14, as of 2026-09-02 — this list was long out of date;
+**Custom doctypes** (16, as of 2026-09-03 — this list was long out of date;
 verify with `frappe.get_all("DocType", filters={"module": "Mobile Shop"})`
 rather than trusting any prose):
 
 - Masters: `Phone`, `Customer`, `Phone Batch`, `Shop Bank`
-- Sale side: `Shop Sale` + children `Phone Sale Item`, `Item Sale Line`;
-  `Sales Entry` (historical only, superseded by Shop Sale)
+- Sale side: `Shop Sale` + children `Phone Sale Item`, `Item Sale Line`,
+  `Payment Line`; `Customer Receipt` + the same shared child `Payment
+  Line` (also destined for Phase 4's Payment Voucher); `Sales Entry`
+  (historical only, superseded by Shop Sale)
 - Intake: `Purchase Voucher` + children `Purchase Voucher Phone Line`,
   `Purchase Voucher Accessory Line` — the single entry point since
   2026-07-28; `Purchase Entry`, `Item Purchase`, `Phone Batch Purchase`

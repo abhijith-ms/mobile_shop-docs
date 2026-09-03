@@ -592,21 +592,39 @@ and verification detail.
   all-time "Browse Accessories" panel, at
   `~/.claude/plans/quick-select-product-panel-pos.md`.
 
-### Phase 2 — bespoke `Bank` master
+### Phase 2 — bespoke `Shop Bank` master
 
-Small and standalone. Unblocks item 4, item 6, and the Bank Book.
+**Done, 2026-09-02, merged and pushed** (3 commits, `c3818fd`..`418e1f9`).
+Named `Shop Bank`, not the `Bank` this plan originally said — that name
+collides with ERPNext's own core `Bank` doctype, caught before any code
+was written (same collision class as Hard Rule 10's `Customer`). Full
+design and verification detail in CLAUDE.md's "Current state" section and
+`~/.claude/plans/bespoke-bank-master.md`.
 
 ### Phase 3 — money in (items 4 + 10)
 
-Built together — they are one form section, not two.
+**Done, 2026-09-03, merged and pushed** (4 commits, `932e9c7`..`e265899`).
+Built together as planned — one form section, not two. Full design and
+verification detail in CLAUDE.md's "Current state" section and
+`~/.claude/plans/phase3-payment-capture.md`.
 
-- Needs a child table, one row per payment component (method, amount,
-  bank), because Mixed can span Card and Benefit Pay landing in different
-  banks. A few fields on Shop Sale cannot represent that.
-- A real customer is forced on any Credit component.
-- BHD 3-decimal rounding rule applies: when rounding a total from multiple
-  parts, round two and derive the third.
-- Includes the customer receipt document for later balance payments.
+- A shared `Payment Line` child table, one row per payment component
+  (method, amount, bank) — reused by `Shop Sale`, `Customer Receipt`, and
+  (Phase 4) `Payment Voucher`, since Mixed can span Card and Benefit Pay
+  landing in different banks and a few fields on Shop Sale couldn't
+  represent that.
+- A real customer is forced on any Credit component — checked as an
+  `any()` over every payment line, not against the sale's sole/first
+  method, so a Mixed Cash+Credit sale is caught the same as a pure-Credit
+  one.
+- The BHD 3-decimal rounding rule applies as a UI convenience only (a
+  newly-added payment line's amount is pre-filled as the remaining
+  balance) — the actual enforcement is an exact-match reconciliation
+  check server-side, not a rounding derivation.
+- `Customer Receipt` (new, submittable) records a later balance payment.
+  Its outstanding-balance figure is a live query, not a stored field —
+  deliberately, to avoid a second stock-counter-shaped invariant needing
+  hand-maintenance at every submit/cancel.
 
 ### Phase 4 — money out (item 6)
 
