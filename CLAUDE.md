@@ -48,10 +48,12 @@ is ever needed back.
 **Next task**: (1) ~~A human browser pass on the Purchase Voucher work~~
 **done 2026-09-04** (see the dated entry below, right after the Purchase
 Voucher build section — driven via Claude in Chrome, both real accounts,
-not manual). (2) a human pass on the intake-cancel work committed
-2026-07-25 — Cancel present for Admin and absent for Staff on all three
-older intake doctypes. Then two hardware-side POS items, no code known to
-be needed — (3) the camera-scanner path on a real tablet/phone browser
+not manual). (2) ~~a human pass on the intake-cancel work~~ **also done
+2026-09-04** (see the dated entry below, right after the intake-cancel
+build section) — Cancel confirmed present for Admin and absent for Staff,
+live in the browser, on all three older intake doctypes. **Only the two
+hardware-dependent items remain, and neither has any code work known to
+be needed** — (3) the camera-scanner path on a real tablet/phone browser
 (desktop testing so far used typed/wedge input); (4) one real print once
 the thermal printer arrives, to confirm 80mm sizing (stated from the start
 as the one thing that can't be verified without hardware).
@@ -1390,7 +1392,7 @@ just-deleted barcode returns a clean `{"type": "not_found"}` instead of
 erroring.
 
 **Cancel support on all three intake doctypes — built and API-verified
-2026-07-25, browser pass still outstanding** (3 commits: 6519b96,
+2026-07-25, browser pass done 2026-09-04** (3 commits: 6519b96,
 cedc6a7, eb7c59f). Started from a user report of "I can't cancel a
 submitted Purchase Entry" and a request to check whether it was the same
 gap already found on Shop Sale. It was — and the diagnosis pass found it
@@ -1485,6 +1487,30 @@ Phone Batch Purchase was tested on synthetic data only. (Both the data
 described here and that lingering timestamp were removed hours later by
 the full wipe above — the paragraph records what was verified at the
 time, not current state.)
+
+**The browser pass this section had flagged as outstanding since
+2026-07-25 was finally done 2026-09-04** — driven live via Claude in
+Chrome rather than left for a manual click-through, both real accounts,
+identity double-checked via `/app/user-profile` immediately after each
+role switch. By this point production data had moved on so completely
+that zero submitted documents of any of the three types existed any more
+(confirmed directly before starting, not assumed) — real intake has been
+100% Purchase Voucher since 2026-07-28, so there was nothing real left to
+click through non-destructively. One manifest-tracked test document of
+each type (`PE-2026-09-00003`, `IP-2026-09-00001`, `PBP-2026-09-00001`)
+was created and submitted specifically to check against: Admin saw a
+"Cancel" button directly in the action bar on all three; Staff's action
+bar showed the same buttons minus Cancel — confirmed absent, not just
+untested, by inspecting the actual rendered bar rather than assuming a
+missing screenshot meant a missing button. A bonus, unplanned
+confirmation along the way: the test `Phone Batch Purchase` correctly
+showed a populated `Phone Batch Lot` field, matching 1b's FIFO-lot design
+landing correctly on this legacy path too. All three test documents
+cancelled (as Admin) then deleted, including the side-effect `Phone` and
+the synthetic `Phone Batch` (deleted directly once empty, same pattern
+as every prior teardown of this kind) — zero residue confirmed
+independently: `Phone` count back to the real 6, `Phone Batch` back to
+the real 1 (`8534578896`), `TWS` accessory stock unchanged at 12.
 
 **Full interactive end-to-end verification pass, 2026-07-22** (no code
 changes — a dedicated live-browser QA pass across the whole app, both
