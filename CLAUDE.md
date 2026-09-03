@@ -45,12 +45,10 @@ that is expected state, not a regression; restore
 `20260725_094524-mobileshop_local-database.sql.gz` if the pre-wipe data
 is ever needed back.
 
-**Next task**: (1) A human browser pass on the **Purchase Voucher** work
-committed 2026-07-28 (see that section below) — the `+ Add Line` dialog,
-the per-row IMEI capture dialog with its live "5 / 10" counter and camera
-button, the per-line VAT Treatment columns in both grids, a real mixed
-voucher submit, and a real cancel with its block message rendered as an
-actual dialog. Also (2) a human pass on the intake-cancel work committed
+**Next task**: (1) ~~A human browser pass on the Purchase Voucher work~~
+**done 2026-09-04** (see the dated entry below, right after the Purchase
+Voucher build section — driven via Claude in Chrome, both real accounts,
+not manual). (2) a human pass on the intake-cancel work committed
 2026-07-25 — Cancel present for Admin and absent for Staff on all three
 older intake doctypes. Then two hardware-side POS items, no code known to
 be needed — (3) the camera-scanner path on a real tablet/phone browser
@@ -1165,8 +1163,8 @@ was reconciled by hand against the document itself — old-format and
 new-format data side by side, so a fix that dropped legacy rows would
 have failed visibly.
 
-**Unified `Purchase Voucher` intake — built 2026-07-28, browser pass
-outstanding** (11 commits, `cf2fe7f`..`e1cc0d7`; plan at
+**Unified `Purchase Voucher` intake — built 2026-07-28, browser pass done
+2026-09-04** (11 commits, `cf2fe7f`..`e1cc0d7`; plan at
 `~/.claude/plans/new-feature-scoping-for-immutable-puppy.md`). Direct
 client request from a real meeting: intake split across three doctypes
 felt fragmented, and one supplier delivery of "10 phones + 10 earphones
@@ -1269,6 +1267,49 @@ correctly blocked and the two reversal mechanisms never double-count.
 The client's own case — 10 phones + 10 earphones + 15 cases on one
 voucher — was submitted end to end through the ordinary permission path
 as the real Staff account.
+
+**The outstanding browser pass on this feature — untouched since the
+2026-07-28 build — was finally done 2026-09-04**, driven live via Claude
+in Chrome rather than left for the user to click through by hand: both
+real accounts, identity double-checked via `/app/user-profile`
+immediately before and after each check per Hard Rule 14 discipline
+(catching nothing this round — both logins were correct throughout).
+Exercised every element the original note named:
+
+- **`+ Add Line` dialog** — opens with a Line Type selector, expands into
+  a full row editor on Add.
+- **Per-line VAT Treatment**, confirmed as a real grid column on both
+  Phone Lines and Accessory Lines, matching the per-line-not-per-document
+  design.
+- **The per-row "Capture IMEIs" dialog** — the live counter genuinely
+  updates in real time ("0 / 2" → "1 / 2" → "2 / 2 IMEIs added"), progress
+  bar fills, and a "Every unit is tracked individually" line appears only
+  once full - not just present in the DOM but changing correctly across
+  three real submissions.
+- **The camera button** - clicked for real, got a clean "Camera
+  Unavailable" fallback dialog with no JS crash; console showed only the
+  same pre-existing `imei_scanner.js` diagnostic logging already
+  documented for this exact fallback path elsewhere in this app, nothing
+  new.
+- **A bonus, unplanned confirmation**: saving the row surfaced a real,
+  non-blocking "IMEI Warning" dialog for the two synthetic test IMEIs'
+  invalid Luhn checksums - the documented soft-warn behavior, live and
+  correct, not just present in code.
+- **A real mixed voucher** (2 captured-IMEI phone units + 1 accessory
+  line) saved and submitted cleanly as `PV-00016`.
+- **The cancel-block dialog** - sold one of the voucher's two phones via
+  a real Shop Sale, then attempted to cancel `PV-00016` as Admin: got a
+  genuine "Not Permitted" dialog (not a raw stack trace) naming the exact
+  reason, `row 1, IMEI 990000862471854: it has already been sold on Shop
+  Sale SS-2026-09-00026`. Cancelled the Shop Sale to undo the sale,
+  retried, and the Purchase Voucher cancelled cleanly the second time -
+  proving the block is real and reversible, not just a static message.
+
+All test data (the voucher, its 2 captured phones, the accessory line's
+stock bump, and the Shop Sale) cleaned up via cancel-then-delete, zero
+residue confirmed independently afterward - Purchase Voucher count back
+to the real 4, Shop Sale count back to the real 5, `TWS` stock unchanged
+at 12.
 
 **Three pre-existing bugs found while doing this, all unrelated to the
 feature**, plus one worth knowing:
