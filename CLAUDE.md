@@ -71,17 +71,19 @@ feature requests plus follow-up answers, a settled bespoke/GL-ready
 accounting architecture decision (Hard Rule 20), and a Phase 1–6 build
 sequence. **All four Phase 1 items (1a, 1b, 1c, 1d) are now done** (see
 their own entries below) — **Phase 1 is fully closed as of 2026-09-02**.
-**Phase 2 (bespoke `Shop Bank` master, 2026-09-02) and Phase 3 (money
-in/payment capture, 2026-09-03) are both done, merged to `develop`, and
-pushed.** Phase 2 was 3 commits (`c3818fd`..`418e1f9`, plan at
-`~/.claude/plans/bespoke-bank-master.md`); Phase 3 was 4 commits
-(`932e9c7`..`e265899`, plan at
-`~/.claude/plans/phase3-payment-capture.md`) — full detail on each in
-their own entries below. Phase 4 (Payment Voucher against Purchase
-Voucher, reusing Phase 3's `Payment Line`) is next, not yet started, not
-yet planned. The frontend-vs-backend sequencing question that once gated
-Phase 3 is now settled (see "Do not start without explicit confirmation"
-below) — Phase 3 was built on the existing Desk/POS UI per that decision.
+**Phases 2, 3, and 4 (bespoke `Shop Bank` master; money in/payment
+capture; money out/Payment Voucher — 2026-09-02/03) are all done, merged
+to `develop`, and pushed.** Phase 2 was 3 commits (`c3818fd`..`418e1f9`,
+plan at `~/.claude/plans/bespoke-bank-master.md`); Phase 3 was 4 commits
+(`932e9c7`..`e265899`, plan at `~/.claude/plans/phase3-payment-capture.md`);
+Phase 4 was 6 commits (`41f053d`..`849df64`, plan at
+`~/.claude/plans/plan-phase-4-lively-lobster.md`) — full detail on each in
+their own entries below. Phase 5 (the registers — Daybook, Cash Book,
+Bank Book) is next, not yet started, not yet planned. The frontend-vs-
+backend sequencing question that once gated Phase 3 is settled (see "Do
+not start without explicit confirmation" below) — Phase 3 was built on
+the existing Desk/POS UI per that decision, and Phase 4 followed the same
+convention (a plain Desk form, no custom JS needed at all).
 
 **A real naming collision was caught before any code was written**:
 PROJECT_PLAN.md and this file both called this "a bespoke `Bank` master."
@@ -323,6 +325,155 @@ deletion even after a clean cancel - needs `force=True` on the delete
 call specifically, not the cancel). Zero residue confirmed independently
 each time; real data (5 Shop Sales, real Item stock levels) unchanged
 throughout.
+
+**Phase 4 (money out — Payment Voucher against Purchase Voucher, item 6)
+— built, verified, merged to `develop`, and pushed, 2026-09-03.** 6
+commits (`41f053d`..`849df64`), full plan and design reasoning at
+`~/.claude/plans/plan-phase-4-lively-lobster.md`. Reused Phase 3's
+`Payment Line` child doctype exactly as PROJECT_PLAN.md's Phase 4 line
+said to, rather than reimplementing it - its schema had already
+anticipated this (`party_type` already included `Supplier`,
+`reference_doctype` already included `Purchase Voucher`, `direction`
+already included `Out`).
+
+**A Plan-agent design review, done before writing any code, surfaced the
+single biggest driver of this phase's shape**: naively mirroring Customer
+Receipt would make every Purchase Voucher start 100% "outstanding" until
+a separate Payment Voucher is filed - even one paid in cash on the spot
+at intake. Asked directly, the user confirmed **cash-at-intake happens
+routinely at this shop** (cash for a private Used-phone seller, card at a
+distributor counter). That answer, not a copy of Phase 3's pattern, is
+why Purchase Voucher ended up with its own embedded payment capture - see
+below. The same review also caught one concrete, mechanical miss before
+it shipped: `payment_date` was left out of the fields the new controller
+would set on each `Payment Line` row, despite that field's own
+description explicitly expecting a parent to set it.
+
+**Purchase Voucher gained a new optional `payment_lines` table** (label
+"Paid At Intake") - payment captured atomically in the same document when
+it happens, mirroring how `Shop Sale` already does this on the sales
+side. Deliberately **no `Credit`-line convention** the way Shop Sale has
+one: these rows are a genuinely partial record of real money paid, never
+required to sum to `total_purchase_value` - the unpaid remainder is just
+whatever the outstanding-balance query says, no placeholder row needed.
+Field population (`direction="Out"`, `party_type="Supplier"`,
+`party=self.supplier`, `reference_doctype="Purchase Voucher"`,
+`reference_name=self.name`, `payment_date=self.invoice_date`) runs inside
+`validate()`, not deferred to `on_submit()` the way Shop Sale's
+equivalent is - confirmed by re-reading the code rather than assumed:
+`total_purchase_value` is already fully computed by `calculate_amounts()`
+earlier in the same `validate()`, so there's no Phone-lookup-shaped
+reason to wait. `reference_name=self.name` makes these rows a
+self-referential Dynamic Link exactly like Shop Sale's (Hard Rule 22
+applies immediately - test teardown needs the same `force=True`-after-
+cancel treatment).
+
+**Checked live on the real Desk form before assuming it was fine, not
+just read from the JSON**: since `mode_of_payment`'s 4 options are shared
+across every parent, `Credit` shows as a selectable option on this
+grid too even though it does nothing there. Confirmed as the real Staff
+account that the shared field's own description says nothing about
+this. Fixed on Purchase Voucher's own `payment_lines` field description
+(the only place that could carry a Purchase-Voucher-specific hint without
+misleading Shop Sale's cart, where Credit *is* meaningful) - one added
+sentence, no validation block, confirmed rendering correctly in a live
+browser check afterward.
+
+**`Payment Voucher` (new doctype)** mirrors `Customer Receipt`'s shape
+exactly: `purchase_voucher`/`supplier` (the latter `fetch_from`, plus the
+same documented-backstop cross-check whose self-healing behaviour Phase 3
+already confirmed empirically transfers cleanly to this case too) /
+`payment_date`/`payment_lines`. One voucher settles exactly one Purchase
+Voucher, confirmed with the user as the actual settlement pattern
+(per-invoice, not lump-sum-across-several) rather than assumed from
+Customer Receipt's precedent alone. Naming series `PMV-.YYYY.-.MM.-.#####`
+- deliberately not `PV-`, which already belongs to Purchase Voucher and
+would have interleaved both doctypes' numbers via Frappe's series counter
+being keyed by the literal prefix string, shared across whichever
+doctypes use it.
+
+**`get_outstanding_purchase_balance()` (new, in `purchase_voucher.py`)**
+has three terms where Shop Sale's equivalent has two, because Purchase
+Voucher can now carry its own paid-at-intake rows on top of what a
+Payment Voucher settles later: `total_purchase_value - own_payments -
+settled_payments`. **A real correctness trap, traced explicitly against
+the actual shipped Phase 3 SQL before writing this, not assumed from the
+field descriptions** (caught by the user's own review of the plan): a
+Purchase Voucher's own `payment_lines` rows and a Payment Voucher's rows
+settling that same Purchase Voucher carry **identical**
+`reference_doctype`/`reference_name` - that field pair records what a row
+settles, not which document it physically lives on, so it cannot tell the
+two row sets apart. Both SQL terms filter on the standard Frappe
+`parent`/`parenttype` child-table columns as the primary key instead
+(`own_payments` via `parenttype = 'Purchase Voucher'`, `settled_payments`
+via `parenttype = 'Payment Voucher'`), exactly mirroring how
+`ShopSale.get_outstanding_balance()` already splits its own two terms -
+`reference_name` is used only as a secondary "which specific voucher"
+scope, never the sole differentiator.
+
+**Closes the race Phase 3 shipped unlocked, per explicit instruction -
+now a documented, deliberate asymmetry, not an oversight** (see the
+dedicated flag below): `get_outstanding_purchase_balance(for_update=True)`
+locks the Purchase Voucher's own row (`SELECT ... FOR UPDATE`) before
+summing, the same pattern already used by `consume_item_stock`/
+`create_phone_from_batch`. `PaymentVoucher.validate()` calls it locked;
+Purchase Voucher's own intake-payment check does not need it (nothing
+races a draft's own not-yet-inserted child rows). **Proven empirically,
+not just read as correct** - the one part of this design that genuinely
+couldn't be confirmed by reading code alone: two separate real
+processes/DB connections both attempting the identical
+`SELECT ... FOR UPDATE` against the same Purchase Voucher row - the
+second genuinely blocked for the full duration the first held the lock
+(waited 5.07s against a 6s hold, acquiring the instant the first
+committed), not a stale instant read.
+
+**`Purchase Voucher.before_cancel()` redesigned to collect every block
+reason before throwing once**, per the review's most concrete catch: the
+new "a submitted Payment Voucher references this" guard was originally
+sketched as an independent early throw, which would mean an admin fixing
+that one reason, retrying, and only then discovering a sold-phone block
+on a second round trip. The existing phone-history check already
+established a collect-then-throw convention in this exact file (its own
+docstring: "Better to refuse... than to silently keep part of it") - the
+new check now feeds into the same shared list instead of bypassing that
+guarantee. The final message wording changed from phone-specific
+phrasing to a generic "cannot be cancelled for the following reason(s)"
+wrapper, a deliberate change to previously-verified user-facing text,
+disclosed rather than silently altered. Uses `exc=frappe.PermissionError`,
+matching this file's own existing convention (not the `ValidationError`
+choice on Shop Sale's equivalent guard - Purchase Voucher's guard already
+used `PermissionError` unconditionally for everyone before this change).
+
+**A real testing mistake caught and corrected before trusting the
+result**: the first verification pass ran the cancel attempts as Staff
+(`clashams4@gmail.com`), who has `cancel:0` on Purchase Voucher - every
+attempt was blocked by the plain permission system before `before_cancel`
+ever ran, so it silently verified nothing. Re-run correctly as the real
+`msadmin.test@mobileshop.local` account (the only role that can reach
+`before_cancel`'s code at all): a voucher with only a submitted Payment
+Voucher against it blocks and names it; a from-scratch doubly-blocked
+voucher (a real captured phone sold via a real Shop Sale, and a real
+Payment Voucher against the same voucher) blocks with **both** reasons in
+one message - confirmed by reading the actual `message_log` content, not
+`str(exception)`, which was empty for `PermissionError`.
+
+Verified throughout via both real accounts, never `Administrator`: a
+fully-on-account voucher settled via two successive Payment Vouchers
+tracking the balance exactly at each step; a voucher partially paid at
+intake correctly reflected in the very next Payment Voucher's outstanding
+calculation (proving the three-term SQL in practice, not just on paper);
+overpayment blocked at both the intake layer and the Payment Voucher
+layer; a supplier-override attempt on Payment Voucher self-healed by
+`fetch_from` exactly like Customer Receipt's; payment against an
+unsubmitted or already-fully-settled Purchase Voucher blocked; Staff
+blocked from cancelling a Payment Voucher (`cancel:0`) while Admin can,
+reopening the balance with no other side effects; homepage tile visible
+to both roles. All test data (Purchase Vouchers with and without embedded
+payment, Payment Vouchers, a Shop Sale, a Phone, a Shop Bank fixture)
+cleaned up via cancel-then-delete in correct dependency order, zero
+residue confirmed independently each time - real Purchase Vouchers
+(`PV-00001/4/5/9`) and Shop Sale count confirmed unchanged throughout.
+Stable across two migrates per commit.
 
 **1a (Purchase Report VAT columns, commit `21839d6`) — fully closed
 2026-09-02, including the real browser click-through.** Re-verified:
@@ -2331,19 +2482,21 @@ but it actually collides with ERPNext's core Customer doctype of the same
 name and currently overrides it. See Hard Rule 10 before assuming either
 description is accurate.)
 
-**Custom doctypes** (16, as of 2026-09-03 — this list was long out of date;
+**Custom doctypes** (17, as of 2026-09-03 — this list was long out of date;
 verify with `frappe.get_all("DocType", filters={"module": "Mobile Shop"})`
 rather than trusting any prose):
 
 - Masters: `Phone`, `Customer`, `Phone Batch`, `Shop Bank`
 - Sale side: `Shop Sale` + children `Phone Sale Item`, `Item Sale Line`,
   `Payment Line`; `Customer Receipt` + the same shared child `Payment
-  Line` (also destined for Phase 4's Payment Voucher); `Sales Entry`
-  (historical only, superseded by Shop Sale)
+  Line`; `Sales Entry` (historical only, superseded by Shop Sale)
 - Intake: `Purchase Voucher` + children `Purchase Voucher Phone Line`,
-  `Purchase Voucher Accessory Line` — the single entry point since
-  2026-07-28; `Purchase Entry`, `Item Purchase`, `Phone Batch Purchase`
-  all still fully functional but historical-only for new entry
+  `Purchase Voucher Accessory Line`, and now the same shared `Payment
+  Line` too (its own optional paid-at-intake capture) — the single entry
+  point since 2026-07-28; `Payment Voucher` + the same shared `Payment
+  Line` (money out against a Purchase Voucher, Phase 4); `Purchase
+  Entry`, `Item Purchase`, `Phone Batch Purchase` all still fully
+  functional but historical-only for new entry
 
 Plus 9 Report doctypes (IMEI History, Sales, Purchase, Accessory
 Purchase, Customer, Supplier, Inventory, Profit, VAT — all built),

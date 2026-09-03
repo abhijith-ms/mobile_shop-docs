@@ -628,9 +628,24 @@ verification detail in CLAUDE.md's "Current state" section and
 
 ### Phase 4 — money out (item 6)
 
-Payment Voucher against Purchase Voucher. Reuses Phase 3's payment
-component rather than reimplementing it. Purchase Voucher only — old intake
-doctypes are out of scope.
+**Done, 2026-09-03, merged and pushed** (6 commits, `41f053d`..`849df64`).
+Full design and verification detail in CLAUDE.md's "Current state"
+section and `~/.claude/plans/plan-phase-4-lively-lobster.md`.
+
+- `Payment Voucher` against `Purchase Voucher`, reusing Phase 3's
+  `Payment Line` rather than reimplementing it, as planned. Purchase
+  Voucher only — old intake doctypes stayed out of scope.
+- One real scope change from what this line originally implied: cash-at-
+  intake turned out to be routine at this shop, so `Purchase Voucher`
+  also gained its own optional embedded `payment_lines` (paid on the
+  spot, mirroring how `Shop Sale` already captures payment atomically) —
+  `Payment Voucher` remains for whatever's settled later.
+- Confirmed with the user: settlements are per-invoice, so one Payment
+  Voucher settles exactly one Purchase Voucher, matching Customer
+  Receipt's precedent rather than a lump-sum-across-several design.
+- The outstanding-balance check gained a `FOR UPDATE` row lock, closing a
+  race Phase 3's equivalent check still has unlocked — a deliberate,
+  documented asymmetry (see CLAUDE.md), not yet retrofitted onto Phase 3.
 
 ### Phase 5 — the registers (items 8, 9)
 
