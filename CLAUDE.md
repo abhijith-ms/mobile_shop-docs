@@ -71,24 +71,28 @@ feature requests plus follow-up answers, a settled bespoke/GL-ready
 accounting architecture decision (Hard Rule 20), and a Phase 1–6 build
 sequence. **All four Phase 1 items (1a, 1b, 1c, 1d) are now done** (see
 their own entries below) — **Phase 1 is fully closed as of 2026-09-02**.
-**Phases 2 through 5 (bespoke `Shop Bank` master; money in/payment
-capture; money out/Payment Voucher; the registers — 2026-09-02/03) are
-all done, merged to `develop`, and pushed.** Phase 2 was 3 commits
+**Phases 2 through 6 (bespoke `Shop Bank` master; money in/payment
+capture; money out/Payment Voucher; the registers; Receivable/Payable on
+the homepage — 2026-09-02/03) are all done, merged to `develop`, and
+pushed — the full Phase 1–6 build sequence from the 2026-09-02
+accountant meeting is now fully closed.** Phase 2 was 3 commits
 (`c3818fd`..`418e1f9`, plan at `~/.claude/plans/bespoke-bank-master.md`);
 Phase 3 was 4 commits (`932e9c7`..`e265899`, plan at
 `~/.claude/plans/phase3-payment-capture.md`); Phase 4 was 6 commits
 (`41f053d`..`849df64`, plan at
 `~/.claude/plans/plan-phase-4-lively-lobster.md`); Phase 5 was 5 commits
-(`37e5518`..`cf0fa42`, plan at `~/.claude/plans/phase5-registers.md`) —
-full detail on each in their own entries below. Phase 6 (Receivable/
-Payable on the homepage, reusing Phase 3/4's outstanding-balance queries)
-is next, not yet started, not yet planned. The frontend-vs-backend
-sequencing question that once gated Phase 3 is settled (see "Do not start
-without explicit confirmation" below) — Phase 3 was built on the existing
-Desk/POS UI per that decision, Phase 4 followed the same convention (a
-plain Desk form, no custom JS needed at all), and Phase 5 is three plain
-Script Reports, the same UI-agnostic shape every other report in this app
-already has.
+(`37e5518`..`cf0fa42`, plan at `~/.claude/plans/phase5-registers.md`);
+Phase 6 was 4 commits (`e39f7da`..`e95fcf2`, plan at
+`~/.claude/plans/phase6-receivable-payable.md`) — full detail on each in
+their own entries below. The frontend-vs-backend sequencing question
+that once gated Phase 3 is settled (see "Do not start without explicit
+confirmation" below) — Phase 3 was built on the existing Desk/POS UI per
+that decision, Phase 4 followed the same convention (a plain Desk form,
+no custom JS needed at all), Phase 5 is three plain Script Reports, the
+same UI-agnostic shape every other report in this app already has, and
+Phase 6 needed no new doctype and no new UI at all — two new Python
+aggregate functions, two new `Number Card` records, and a small existing-
+launcher wiring change.
 
 **A real naming collision was caught before any code was written**:
 PROJECT_PLAN.md and this file both called this "a bespoke `Bank` master."
@@ -593,6 +597,148 @@ combinations confirmed correct. All test data cleaned up via cancel-
 then-delete each round, zero residue confirmed independently - real data
 (5 Shop Sales, 4 Purchase Vouchers) unchanged throughout. Stable across
 two migrates per commit.
+
+**Phase 6 (Receivable/Payable on the home launcher, item 5) — built,
+verified, merged to `develop`, and pushed, 2026-09-03.** 4 commits
+(`e39f7da`..`e95fcf2`), full plan and design reasoning at
+`~/.claude/plans/phase6-receivable-payable.md`. Last item of the
+accountant-meeting phase plan, built last deliberately per
+PROJECT_PLAN.md's own reasoning: "Receivable is only meaningful once item
+10 exists" (Customer Receipt, Phase 3) "Payable only once item 6 does"
+(Payment Voucher, Phase 4) - both already shipped.
+
+**No new doctype was needed at all** - genuinely the smallest of the six
+phases. `get_outstanding_balance()` (Shop Sale, Phase 3) and
+`get_outstanding_purchase_balance()` (Purchase Voucher, Phase 4) already
+compute the exact per-document formulas this phase needed to aggregate -
+both already said so in their own docstrings, written at the time as a
+forward note for this phase. Traced Frappe's own `Number Card.get_result()`
+(`frappe/desk/doctype/number_card/number_card.py`) before assuming a
+Number Card could or couldn't do this: for a `"Document Type"` card it
+always runs one `frappe.get_list` aggregate (`Sum`/`Count`/etc.) on a
+single stored field on a single doctype - there is no stored
+"outstanding balance" field to point it at, deliberately (same
+anti-`Phone Batch.untracked_qty`-drift reasoning as every other live-query
+balance in this app), so that mechanism was structurally the wrong fit.
+`type: "Custom"` Number Cards exist for exactly this gap - confirmed in
+`number_card.py`'s own `validate()` (a `Custom` card only requires a
+`method`) and in Frappe's `number_card_widget.js` (a `Custom` card's
+native widget calls `frappe.call({method: doc.method})` directly,
+bypassing `get_result()` entirely). This is the mechanism used, rather
+than inventing a second, parallel "homepage stat" concept alongside the
+Number Card doctype the other 3 stats already use.
+
+**Two new bulk, set-based SQL aggregates**, one per doctype, each
+mirroring its existing per-document sibling's exact term structure but
+computed across every submitted document at once (no per-document Python
+loop, no N+1): `get_total_receivable()` in `shop_sale.py` (the same two
+terms as `get_outstanding_balance()`: this sale's own Credit-mode
+`Payment Line` rows minus every submitted Customer Receipt's rows
+referencing it, `parenttype` still the primary filter distinguishing the
+two row sets exactly as Phase 3/4 established) and `get_total_payable()`
+in `purchase_voucher.py` (the same three terms as
+`get_outstanding_purchase_balance()`). Neither needs a `FOR UPDATE` lock
+- both are read-only dashboard aggregates, not a decrement guard racing a
+concurrent writer.
+
+**A real business-judgment question, asked rather than assumed**: both
+layers already hard-block overpayment prospectively at submit time, but
+Customer Receipt's `get_outstanding_balance()` read still ships unlocked
+(the Phase 3/4 locking asymmetry flagged below Phase 4's entry, still not
+retrofitted), so a rare race could in theory leave one document very
+slightly overpaid (negative outstanding). Asked directly whether the
+aggregate should floor each document's outstanding at 0 before summing
+(so one overpaid document can never mask real money owed elsewhere) or
+sum raw signed values (a true net cash-position figure, at the cost of a
+rare understatement). **Decided: floor at zero** - both SQL aggregates
+wrap each document's computed outstanding in `GREATEST(outstanding, 0)`
+before summing. The per-document functions themselves are completely
+untouched by this - they still return the real signed value everywhere
+else that calls them.
+
+**`home_tiles.py`'s `get_homepage_stats()` gained a type branch**, since
+it previously called `get_result()` unconditionally for every
+`STAT_CARDS` name: `"Document Type"` cards still go through `get_result()`
+as before, `"Custom"` cards call their own `method` directly - the exact
+thing Frappe's native widget does, just invoked from this app's own
+hand-rolled stats endpoint instead of a native Workspace dashboard
+widget. Each returned stat now carries an `is_currency` flag (true for
+every `Custom` card today) so the launcher's JS can format BHD amounts to
+3dp instead of a raw float tail - Hard Rule 5 territory, and a real gap
+that would have shipped invisibly, since the 3 pre-existing stats are all
+plain integer counts that never needed currency formatting at all. Fixed
+with a one-line change to the live `Mobile Shop Home Launcher` Custom
+HTML Block's `render_stats()` (`s.is_currency ? Number(s.value).toFixed(3)
+: String(s.value)`) - applied directly via a bench script, the same way
+the original launcher was built, since (already flagged, still unfixed,
+not this phase's problem to solve) this record has no on-disk fixture
+file at all.
+
+**No permission gate needed on either stat, confirmed rather than
+assumed** - every field either aggregate reads (`Payment
+Line.paid_amount`, `Shop Sale`/`Purchase Voucher.total_charged`/
+`total_purchase_value`) is permlevel 0 per Hard Rule 3's table. The 3
+pre-existing `STAT_CARDS` entries also have no `admin_check`; Receivable/
+Payable follow the same precedent and are visible to both roles.
+
+**Verification pushed past a code-level proof of the floor-at-zero
+decision into an actual empirical one**: constructed two real Shop Sales
+side by side - one deliberately overpaid to a synthetic -980 outstanding
+via a raw SQL `INSERT` directly into `tabPayment Line` (the only way to
+reach that state at all, since both layers hard-block overpayment
+prospectively at submit time), the other left genuinely untouched at
++15. Confirmed the aggregate landed at exactly +15, not the raw signed
+sum of -965 - the first sale's overpayment did not mask the second's
+real receivable, the actual guarantee the decision was chosen for, not
+just a plausible-sounding one. Also worth recording: the first version of
+this test asserted the wrong invariant (that the aggregate must never
+drop *below its value right before the hack*, i.e. 20) rather than the
+correct one (that a document's floored contribution is `GREATEST(outstanding,
+0)`, which corrects a document's contribution down to 0 as it swings
+negative, and only ever protects *other* documents' balances from being
+masked) - caught by hand-deriving what the SQL should actually produce
+before accepting the first failing run as a bug, rather than "fixing" the
+code to satisfy a wrong test.
+
+Every other check run empirically via the same sys.path-into-the-worktree
+technique used to test worktree code against the real site pre-merge
+(the running bench server only serves the main checkout, so this is how
+every phase's pre-merge API-level verification in this app actually
+happens): both new aggregates matched an independent per-document
+cross-check exactly against real baseline data (Receivable 0.0, Payable
+8000.0); a fresh Credit sale and a partial Customer Receipt tracked
+Receivable through +50 then netting to +20 exactly; a fresh
+zero-payment Purchase Voucher and a partial Payment Voucher tracked
+Payable through +1000 then netting to +600 exactly; both real accounts
+saw identical values at every step. All test data cleaned up via
+cancel-then-delete (force-deleting only past the Hard Rule 22
+self-referential-Dynamic-Link false positive, never to skip a real
+cancel), zero residue confirmed independently each round; real data (5
+Shop Sales, 4 Purchase Vouchers) confirmed unchanged throughout.
+
+**A genuine Hard Rule 14 near-miss hit during the live browser pass,
+worth recording as its own cautionary instance**: mid-session, a stale
+cached SPA page briefly showed "clash" in `get_page_text()` immediately
+after navigating away and hard-reloading, while a follow-up
+`/app/user-profile` check moments later revealed the session had
+actually reverted to `Administrator`. The tile screenshot taken in that
+window looked completely convincing (correct values, correct layout) but
+verified nothing real. Caught before it was reported as done, the user
+was asked to log back in, and every subsequent tile screenshot was paired
+with an **immediate** follow-up `/app/user-profile` re-check right after
+- not just once before, which is what let the stale-state gap slip
+through the first time. Both re-verified this way: Staff (avatar "c")
+and Admin (avatar "MS", "Mobile Shop Admin (role test fixture)") both
+show identical `0.000` Receivable / `8000.000` Payable, correctly
+formatted, alongside the existing tiles unaffected, zero console errors.
+
+Verified with two `bench migrate` runs (Hard Rule 1 discipline for the
+two new `Number Card` records) and a `bench clear-cache` before the
+browser pass. `Number Card` count for this app is now 5 (3
+`"Document Type"`, 2 `"Custom"`).
+
+This closes the full Phase 1-6 build sequence from the 2026-09-02
+accountant meeting.
 
 **1a (Purchase Report VAT columns, commit `21839d6`) — fully closed
 2026-09-02, including the real browser click-through.** Re-verified:
@@ -2620,7 +2766,10 @@ rather than trusting any prose):
 Plus 12 Report doctypes (IMEI History, Sales, Purchase, Accessory
 Purchase, Customer, Supplier, Inventory, Profit, VAT, and Phase 5's
 Daybook/Cash Book/Bank Book — all built),
-3 Number Cards, 2
+5 Number Cards (3 `"Document Type"` — Phones In Stock, Purchases This
+Month, Sales This Month — plus Phase 6's 2 `"Custom"` — Total Receivable,
+Total Payable, each backed by a whitelisted aggregate function rather
+than a stored field), 2
 Workspaces (`Mobile Shop`, `Mobile Shop Home`), 1 Desk Page
 (`mobile-shop-pos`), 1 Custom HTML Block (the homepage launcher — **lives
 only in the site DB, not fixture-tracked**), and 9 Print Formats.

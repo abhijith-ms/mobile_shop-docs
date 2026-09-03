@@ -679,9 +679,31 @@ section and `~/.claude/plans/phase5-registers.md`.
 
 ### Phase 6 — Receivable / Payable on home (item 5)
 
-Last, deliberately. Receivable is only meaningful once item 10 exists;
-Payable only once item 6 does. Building earlier would ship a dashboard tile
-showing two permanent zeros.
+**Done, 2026-09-03, merged and pushed** (4 commits, `e39f7da`..`e95fcf2`).
+Full design and verification detail in CLAUDE.md's "Current state"
+section and `~/.claude/plans/phase6-receivable-payable.md`.
+
+Last, deliberately, as planned. Receivable is only meaningful once item 10
+exists; Payable only once item 6 does — both were already shipped
+(Phases 3 and 4) by the time this was built.
+
+- No new doctype needed. `get_outstanding_balance()` (Shop Sale) and
+  `get_outstanding_purchase_balance()` (Purchase Voucher) already computed
+  the exact per-document formulas needed; this phase added two new
+  bulk, set-based SQL aggregates (`get_total_receivable()`,
+  `get_total_payable()`) reusing the same term structure across every
+  submitted document at once, plus two new `"Custom"`-type `Number Card`
+  records (Frappe's native mechanism for a computed, non-stored-field
+  aggregate) wired into the existing homepage launcher's stats endpoint.
+- One real business-judgment question, asked rather than assumed: whether
+  the aggregate should floor each document's outstanding balance at 0
+  before summing, so a rare overpaid document (the still-unlocked
+  Customer Receipt race flagged under Phase 4) can never mask real money
+  owed on other documents. Decided: floor at zero. Proven empirically
+  with two real documents side by side, not just reasoned through — see
+  CLAUDE.md.
+- The full Phase 1–6 build sequence from the 2026-09-02 accountant
+  meeting is now closed.
 
 ## Frontend vs. backend sequencing — SETTLED 2026-09-02
 
