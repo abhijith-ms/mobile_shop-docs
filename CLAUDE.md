@@ -2164,15 +2164,17 @@ state" above; Phase 2 (unified `Shop Sale` checkout mixing Phone + Item
 lines) and Phase 3 (retiring Sales Entry, updating reports) are still
 gated, full accounting integration
 (migrating custom Sales Entry/Purchase Entry to post to ERPNext's native
-Sales Invoice/Purchase Invoice/GL — a real architecture decision, not a bolt-on;
-**blocked on resolving the Customer/ERPNext-core naming collision first, see
-Hard Rule 10** — native Sales Invoice depends on ERPNext's own Customer
-doctype behavior), any change to whether PMS invoices show a VAT amount
-(would contradict the NBR guide's explicit "must not show VAT amount" rule —
-needs reconfirmation, not assumption). Also pending a decision (not urgent
-until the above is picked up): how to resolve the Customer naming collision
-itself — rename mobile_shop's doctype vs. formally cleaning up/taking over
-ERPNext's Customer.
+Sales Invoice/Purchase Invoice/GL — a real architecture decision, not a
+bolt-on). **The Customer/ERPNext-core naming collision that used to block
+this (Hard Rule 10) is resolved as of 2026-09-04** — mobile_shop formally
+took over "Customer," so this is no longer a precondition; whether to
+build Phase A against ERPNext's native Sales Invoice at all is still an
+open, separate architecture question (see Hard Rule 20's own reasoning for
+why direct GL Entry posting was the assumption going in), but it is not
+blocked on a naming collision any more. Also still open: any change to
+whether PMS invoices show a VAT amount (would contradict the NBR guide's
+explicit "must not show VAT amount" rule — needs reconfirmation, not
+assumption).
 
 **Added 2026-07-28, from the Purchase Voucher work** — four more, none
 urgent, none to be decided unilaterally:
@@ -2268,6 +2270,55 @@ on Phase 4's original proof, which used real separate processes but
 evidently avoided this exact pitfall; it's recorded here so the next
 concurrency test in this app doesn't have to rediscover the pitfall from
 scratch.
+
+**Customer/ERPNext column cleanup — Hard Rule 10 resolved, built and
+verified 2026-09-04.** New `mobile_shop/utils/customer_schema.py` +
+`hooks.py`'s new `after_migrate` entry. Full reasoning in Hard Rule 10
+(the decision itself - take over "Customer" rather than rename) and Hard
+Rules 23/24 (the mechanism, and two sharp technical edges found building
+it). In short: `cleanup_erpnext_customer_columns()` deletes the one stray
+`crm_deal` Custom Field (added by ERPNext's own CRM Settings sync) and
+the orphaned `naming_series` Property Setter rows, then calls Frappe's
+own `frappe.model.meta.trim_table("Customer", dry_run=False)` - the same
+function `bench trim-table` uses - to drop whatever `tabCustomer`
+physically carries that mobile_shop's own 6-field Customer doctype
+doesn't declare. Runs unconditionally on every migrate, forever, since a
+one-time patch cannot survive erpnext's own unconditional re-sync (Hard
+Rule 23).
+
+**A real mid-session data-loss incident happened while verifying this,
+caught and fully repaired before it shipped.** A `bench --site
+mobileshop.local backup` was taken first specifically because this work
+is schema-destructive, and its restorability was confirmed (`gzip -t`
+plus a real `CREATE TABLE`/`INSERT` content check) before touching
+anything - the same discipline as the 2026-07-25 wipe. An early
+verification attempt then force-resynced only ERPNext's own
+`customer.json` (not mobile_shop's own afterward, unlike what a real
+migrate always does next) before calling the cleanup function to test
+it - this left the live doctype meta stuck in ERPNext's shape, and the
+meta-driven cleanup function correctly-by-its-own-logic dropped
+mobile_shop's own `phone`/`email`/`cpr`/`address`/`is_walk_in` columns
+instead, genuinely destroying the real `abhijith` customer's phone
+number and the real `Walk-in Customer`'s `is_walk_in` flag on the live
+site. Caught immediately via a data-integrity check inside the same
+verification pass (not by a later, separate discovery); the exact lost
+values were read back out of the pre-work backup's own `INSERT INTO
+\`tabCustomer\`` statement and restored via direct SQL before proceeding
+- confirmed byte-for-byte against the backup, not reconstructed from
+memory. Verification was then redone correctly (see Hard Rule 24's
+second point) and passed cleanly.
+
+Final verification, done against the real site rather than trusted from
+the corrected simulation alone: two consecutive real `bench migrate`
+runs (Hard Rule 1's own "verify twice" discipline, applied here to a
+migrate-time hook rather than a Workspace/Number Card) both completed
+clean and left `tabCustomer` stable at exactly 17 columns
+(the 11 standard Frappe base fields plus mobile_shop's own 6), with the
+real `abhijith`/`sahad`/`Walk-in Customer` rows' data intact and the
+`Customer` doctype's own meta correctly showing `module: "Mobile Shop"`
+throughout. Also confirmed via the real ORM (`frappe.get_doc("Customer",
+...)`, not just raw SQL) that document loading and Staff-level reads
+still work correctly post-cleanup.
 
 ## Hard rules — these came from real bugs, don't relearn them the hard way
 
@@ -2377,31 +2428,29 @@ scratch.
    absent for a role.
 
 10. **The custom `Customer` doctype in this app is not cleanly separate from
-    ERPNext's core `Customer` doctype — it collided with it and won.** ERPNext
-    ships its own `Customer` doctype (`erpnext/selling/doctype/customer/customer.json`,
-    module "Selling"). mobile_shop's `customer.json` (module "Mobile Shop") uses
-    the identical doctype name. Frappe only allows one `tabDocType` row per
-    name, and app doctype-sync is additive-only (never drops columns), so:
-    the live `tabDocType` meta for "Customer" is currently mobile_shop's
-    version (confirmed via `frappe.get_doc("DocType", "Customer").module ==
-    "Mobile Shop"`) because mobile_shop syncs last in `apps.txt` order
-    (`frappe, erpnext, mobile_shop`) — but the physical `tabCustomer` MySQL
-    table still carries ~50 leftover ERPNext-core columns
-    (`customer_type`, `customer_group`, `territory`, `tax_id`,
-    `loyalty_program`, etc.) that were never cleaned up, dead weight from
-    before mobile_shop's definition took over. Discovered 2026-07-21 while
-    adding the `address` field — not caused by that change, pre-existing
-    since Customer was first created. This is the same failure mode the
-    Supplier decision deliberately avoided (see "General conventions"
-    below), just triggered in the opposite direction. Implication: **any
-    future work that touches ERPNext's native Customer-linked features
-    (Sales Invoice, Quotation, core Selling reports, the accounting-integration
-    item in "Do not start without explicit confirmation") must account for
-    this collision first** — don't assume "Customer" behaves like a normal
-    ERPNext core doctype, and don't assume it's a clean standalone custom
-    doctype either. Not yet fixed; needs a real decision (rename mobile_shop's
-    doctype, or formally take over/clean up ERPNext's Customer) before it's
-    touched further.
+    ERPNext's core `Customer` doctype — it collided with it, and mobile_shop's
+    version deliberately won.** ERPNext ships its own `Customer` doctype
+    (`erpnext/selling/doctype/customer/customer.json`, module "Selling").
+    mobile_shop's `customer.json` (module "Mobile Shop") uses the identical
+    doctype name. Frappe only allows one `tabDocType` row per name, so the
+    live `tabDocType` meta for "Customer" is mobile_shop's version (confirmed
+    via `frappe.get_doc("DocType", "Customer").module == "Mobile Shop"`)
+    because mobile_shop syncs last in `apps.txt` order
+    (`frappe, erpnext, mobile_shop`). Discovered 2026-07-21 while adding the
+    `address` field — not caused by that change, pre-existing since Customer
+    was first created. Same failure mode the Supplier decision deliberately
+    avoided (see "General conventions" below), triggered in the opposite
+    direction. **Resolved 2026-09-04** — formally took over "Customer"
+    rather than renaming mobile_shop's doctype (the other option on the
+    table), decided because Phase A's planned GL integration (Hard Rule 20)
+    was already designed around posting GL Entry rows directly, never around
+    adopting ERPNext's native Sales Invoice/Customer shape wholesale, so
+    nothing this app was ever going to build actually needed Customer to
+    carry ERPNext's Selling-module fields. See Hard Rule 23 for why this
+    needed a permanent `after_migrate` hook rather than a one-time patch,
+    and the "Customer/ERPNext column cleanup" entry further down for the
+    full build/verification narrative, including a real mid-session data-loss
+    incident this surfaced and fully repaired (see Hard Rule 24).
 
 11. **`add_to_apps_screen` + `System Settings.default_app`/`User.default_app`
     cannot point at a standalone Desk Page if the app owns any Workspace at
@@ -2772,6 +2821,68 @@ scratch.
     cancelled cleanly, check whether the doc has a self-referential
     Dynamic Link field before assuming something is wrong.
 
+23. **A doctype-name collision between two installed apps cannot be fixed
+    with a one-time patch — only a permanent, idempotent hook.** Traced
+    directly from `frappe/model/sync.py` before assuming otherwise:
+    `bench migrate` calls `sync_for(app)` unconditionally for **every**
+    installed app in `apps.txt` order, with no awareness that a later app
+    already claims a given doctype name. So when two apps both declare a
+    doctype called the same thing (Hard Rule 10's `Customer`), the
+    "losing" app's own JSON still gets re-synced into the shared physical
+    table on every single migrate, forever — a one-time
+    `ALTER TABLE ... DROP COLUMN` patch would just have those columns
+    silently recreated on the very next migrate. There is no supported
+    Frappe hook to tell one specific app "skip this one doctype," and
+    editing the other app's own doctype JSON to stop it trying would
+    violate "never modify ERPNext core" and wouldn't survive a
+    `bench update` anyway (git restores the file from that app's own
+    history). The only real fix is a permanent `after_migrate` hook that
+    re-cleans the collided table every time - permanent in the sense that
+    matters (nobody ever needs to remember it, it just always runs), not
+    in the sense of stopping the other app from trying. Use Frappe's own
+    `frappe.model.meta.trim_table(doctype, dry_run=False)` for the actual
+    cleanup rather than a hand-maintained column list — it computes
+    "physical columns minus this doctype's own declared fieldnames"
+    itself, so it's self-maintaining if the winning app's own fields ever
+    change, and (see Hard Rule 24) it correctly invalidates Frappe's
+    cached table-columns list, which a raw DDL statement does not. Any
+    Custom Field or Property Setter rows the losing app's sync also
+    created must be deleted explicitly first — `trim_table()` treats a
+    live Custom Field as a real field and will never touch its column
+    while the Custom Field row still exists.
+
+24. **Two sharp edges found building Hard Rule 23's cleanup hook, both
+    worth knowing before writing anything like it again:**
+    - **A raw `ALTER TABLE ... DROP COLUMN` via `frappe.db.sql_ddl()`
+      does not invalidate Frappe's own Redis-cached table-columns list.**
+      `frappe.database.database.Database.clear_db_table_cache()` only
+      fires for literal `DROP`/`CREATE` query types — `ALTER TABLE` isn't
+      one of them — so a later `frappe.db.get_table_columns()` call, in
+      the same process or a fresh one, keeps reporting already-dropped
+      columns as still present until something explicitly calls
+      `frappe.cache.hdel("table_columns", "tab<Doctype>")`.
+      `frappe.model.meta.trim_table()` does this itself before computing
+      anything, which is one more reason to use it over a hand-rolled
+      `ALTER TABLE` loop, not just for the column-list logic.
+    - **Never verify sync-order-dependent cleanup with a partial
+      simulation of the sync sequence.** The real risk this app's own
+      `apps.txt` order creates: `bench migrate` syncs `erpnext`'s
+      `customer.json` *before* `mobile_shop`'s own, so mid-migrate the
+      live doctype meta briefly reflects ERPNext's shape before
+      mobile_shop's later sync restores its own. A verification script
+      that force-resyncs only the *first* app's JSON and then calls the
+      cleanup function - skipping the second app's JSON a real migrate
+      would always run next - leaves the meta stuck in the wrong
+      intermediate state, and a meta-driven cleanup function (correctly,
+      by its own logic) then drops the *other* app's fields instead. This
+      is exactly what happened while building the Hard Rule 23 hook: a
+      partial simulation genuinely dropped real `Customer.phone`/
+      `is_walk_in` data on the live site before being caught via a
+      pre-work backup and repaired. Always resync every app that touches
+      the collided doctype, in real `apps.txt` order, before evaluating a
+      cleanup function meant to run after all of them - never resync just
+      the one app under test.
+
 ## Verification discipline — do not skip this
 
 After any migrate, DO NOT assume a fix worked just because the command
@@ -2839,9 +2950,10 @@ doctypes wherever possible; keep all custom logic inside `mobile_shop`.
 **Built-in ERPNext doctypes reused as-is (never modify directly)**: Supplier,
 User, Role, Address, Contact, Print Format, Report. (Note: Customer was
 *intended* as a fully separate custom doctype, not ERPNext's core Customer —
-but it actually collides with ERPNext's core Customer doctype of the same
-name and currently overrides it. See Hard Rule 10 before assuming either
-description is accurate.)
+it collided with ERPNext's core Customer doctype of the same name instead,
+and as of 2026-09-04 formally takes it over on purpose, per Hard Rule 10 -
+see that rule and Hard Rules 23/24 for the mechanism and why it has to be
+a permanent `after_migrate` hook rather than a one-time fix.)
 
 **Custom doctypes** (17, as of 2026-09-03 — this list was long out of date;
 verify with `frappe.get_all("DocType", filters={"module": "Mobile Shop"})`
