@@ -2223,22 +2223,51 @@ Set — Phase Plan" section):
   custom-React-frontend payoff argument). See Hard Rule 20 for the field
   contract that keeps this decision cheap to migrate later.
 
-**Added 2026-09-03, from Phase 4 — a real inconsistency, flagged for a
-future conscious decision, not fixed here**: `Shop Sale`/`Customer
-Receipt`'s `get_outstanding_balance()` (Phase 3) reads the sale's
-outstanding balance with a plain, unlocked `frappe.db.sql()` — two
-Customer Receipts submitted against the same sale at the exact same
-instant could both read a stale figure and together overpay.
-`Purchase Voucher`/`Payment Voucher`'s `get_outstanding_purchase_balance()`
-(Phase 4) closes the identical race with a `SELECT ... FOR UPDATE` lock
-on the Purchase Voucher's own row before summing — added deliberately in
-Phase 4, not retrofitted onto Phase 3. The two now behave differently
-under concurrency for what is otherwise the same shape of check. Left
-this way on purpose rather than silently carried forward: either
-retrofit the lock onto Shop Sale's version, or accept the asymmetry
-permanently, is a real choice someone should make deliberately - not
-something Phase 5/6 should rediscover by accident while building
-Receivable/Payable on top of both queries.
+**Added 2026-09-03, from Phase 4, resolved 2026-09-04** — the flagged
+inconsistency between `Shop Sale`/`Customer Receipt`'s
+`get_outstanding_balance()` (Phase 3, shipped unlocked) and `Purchase
+Voucher`/`Payment Voucher`'s `get_outstanding_purchase_balance()` (Phase
+4, `SELECT ... FOR UPDATE` locked) was the real, deliberate choice this
+note asked someone to make — decided: **retrofit the lock onto Shop
+Sale's version**, rather than accept the asymmetry permanently.
+`get_outstanding_balance()` gained the identical `for_update` parameter
+(`SELECT total_charged FROM tabShop Sale WHERE name = %s FOR UPDATE`
+before summing), and `CustomerReceipt.validate()` now calls it with
+`for_update=True`. `get_total_receivable()` (Phase 6) is unaffected by
+design - it's a read-only dashboard aggregate, not a decrement guard, so
+it never needed the lock either way.
+
+**A real scare during verification, worth recording as its own lesson**:
+the first concurrency test - two separate OS processes, synchronized via
+a flag file written by a background "holder" script and polled by a
+sequential "until the file exists" shell loop before launching a
+"waiter" script - showed the lock appearing not to block at ALL, even
+with raw PyMySQL bypassing Frappe entirely. This looked like it could
+mean FOR UPDATE didn't actually work in this environment, which would
+have cast doubt on Phase 4's own already-shipped, already-documented
+proof of the identical pattern. Chased down rather than assumed either
+way: it was a **test-harness artifact, not a real database or product
+bug** - the latency between two separate, sequentially-issued Bash tool
+calls in this environment was large enough that the "holder" process had
+often already finished its entire hold-and-commit cycle before the
+"waiter" process even started, so there was genuinely nothing left to
+wait for by the time the waiter ran. Confirmed by rewriting the test as
+two precisely-synchronized Python threads in one process (a
+`threading.Event` between them, no inter-process/inter-tool-call
+dispatch gap at all) driving the real `get_outstanding_balance(for_update=True)`
+code path directly: the waiter's own call took exactly 5.00s to return,
+matching the holder's 5-second hold exactly - genuine, verified
+blocking. **Lesson for any future concurrency proof in this app**: don't
+synchronize two separate OS processes via a flag file plus sequential
+tool-call launches - the dispatch latency between tool calls can exceed
+the entire test window and produce a false "it's not blocking" result.
+Use two threads in one process with a `threading.Event` (or an
+equivalent tight, same-process synchronization primitive) instead, so
+timing is controlled precisely rather than assumed. This casts no doubt
+on Phase 4's original proof, which used real separate processes but
+evidently avoided this exact pitfall; it's recorded here so the next
+concurrency test in this app doesn't have to rediscover the pitfall from
+scratch.
 
 ## Hard rules — these came from real bugs, don't relearn them the hard way
 
