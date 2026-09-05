@@ -59,8 +59,8 @@ input); (4) one real print once the thermal printer arrives, to confirm
 80mm sizing (stated from the start as the one thing that can't be verified
 without hardware). **New, separate track since 2026-09-05**: the React/
 Vue custom frontend rebuild (see "Custom frontend rebuild" section further
-down) — F1 (scaffold + auth) is done; F2 (dashboard) is the next phase
-whenever picked up, no deadline.
+down) — F1 (scaffold + auth) and F2 (dashboard) are both done; F3
+(reports) is the next phase whenever picked up, no deadline.
 
 Two questions are open **for the accountant**, both recorded in the
 Purchase Voucher section: what `Phone.purchase_price` should store on a
@@ -2361,6 +2361,73 @@ for F2 onward:**
   at an installed extension's content script, not this page's code. Worth
   remembering if a future browser check shows a similar unexplained crash:
   try a clean/incognito profile before assuming an app bug.
+
+**F2 (dashboard) — built, verified, merged to `develop`, and pushed,
+2026-09-05.** 1 commit (`a068026`). Wired Vue Router for real for the
+first time (`App.vue` is now a thin `<router-view/>` shell, F1's spike
+content retired — its job was done and recorded) — single route so far
+(`/` → `Dashboard.vue`), base path keyed off `import.meta.env.DEV` (`/`
+dev, `/shop/` prod, matching hooks.py's `website_route_rules`).
+
+`Dashboard.vue` calls the same two whitelisted methods unchanged
+(`get_homepage_stats`, `get_homepage_tiles`) and renders the same 5 stats
++ tile-grid-by-section shape the old Desk launcher served. Tile icons
+reuse `frappe-ui`'s `FeatherIcon` component directly — confirmed the
+icon name strings in `home_tiles.py`'s `TILE_SECTIONS` data are real
+Feather icon names first (only `"building"` is missing from Feather's
+set; `FeatherIcon.vue` already falls back to a circle icon gracefully
+for any unknown name, so no mapping was needed). Tile colors are a fresh
+Tailwind mapping (`utils/tileColor.ts`) — the old launcher's colors
+pointed at Desk's own CSS custom properties, not available here.
+
+**Every tile is a plain `<a href>` to the real Desk URL, not a
+`router-link` — deliberate, not a placeholder to "fix" later.**
+`utils/tileRoute.ts` replicates `frappe.utils.generate_route()`'s
+DocType/Report/Page branches, traced directly from
+`apps/frappe/frappe/public/js/frappe/utils/utils.js` (that Desk-JS
+global isn't loaded in this standalone SPA) rather than guessed. Every
+tile today targets a screen this phase hasn't built — Records stay on
+Desk permanently per the roadmap's scope decision, Reports/POS/Purchase
+Voucher each get their own in-SPA route in a later phase — so a real
+Desk URL is correct now and gets replaced tile-by-tile as each target
+phase lands, not something to revisit as a batch later.
+
+**Reviewed via `ecc:vue-reviewer` and `ecc:typescript-reviewer` before
+merge**, both scoped to just the 6 changed files rather than a
+project-wide typecheck (confirmed all ~365 of `frappe-ui`'s own
+pre-existing type errors are inside `node_modules/frappe-ui`, none
+attributable to this app's code — a project-wide typecheck would have
+drowned real findings in vendor noise). Vue review: approved, two
+non-blocking MEDIUM notes (a `Promise.all` over the two independent
+calls means either call failing blanks both halves of the dashboard
+instead of degrading just one; tile/stat `v-for` keys use the backend's
+`label`/`section` string rather than a dedicated id — both accepted as
+fine against the current small, static, backend-controlled tile list).
+TypeScript review: two HIGH findings, both fixed before merge — an
+explicit `catch (err: any)` that threw away TypeScript's safer default
+`unknown` catch-variable typing for no real gain (narrowed with
+`instanceof Error` instead); and `call()`'s untyped response being
+assigned straight into typed refs with zero shape validation, which
+could throw uncaught inside Vue's render on a shape mismatch instead of
+surfacing the dashboard's own error-state UI (added an `Array.isArray`
+guard at the one call site). **Worth remembering going into F3**: this
+exact fetch-and-assign-untyped-`call()`-result pattern is the template
+for the next 12 report screens — the same shape-guard instinct applies
+each time, not just here.
+
+Live-verified via Claude in Chrome as both real accounts already logged
+in this session (an accidental but genuine confirmation, not staged —
+the Staff check happened because the browser session had switched
+accounts since F1 without noticing at first, caught by checking
+`frappe.auth.get_logged_user` directly rather than assuming, per Hard
+Rule 14 discipline): stats matched Desk exactly (4 phones / 0 purchases
+/ 0 sales / 0.000 receivable / 8000.000 payable); Staff correctly hid
+the two admin-gated Report tiles (Profit Report, VAT Report), Admin
+correctly saw all 12; clicking a DocType tile (Purchase Voucher) and a
+Report tile (Purchase Report) both navigated to the correct real Desk
+URL through the dev proxy with real data (`PV-00005/4/1`,
+`/app/query-report/Purchase%20Report`); no console errors either way.
+
 - **The accounting layer's architecture is SETTLED, not open** — listed
   here only so it isn't mistaken for a pending decision: fully bespoke,
   GL-ready `Shop Bank` master + payment child table, deliberately NOT ERPNext's
