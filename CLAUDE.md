@@ -51,12 +51,16 @@ Voucher build section — driven via Claude in Chrome, both real accounts,
 not manual). (2) ~~a human pass on the intake-cancel work~~ **also done
 2026-09-04** (see the dated entry below, right after the intake-cancel
 build section) — Cancel confirmed present for Admin and absent for Staff,
-live in the browser, on all three older intake doctypes. **Only the two
-hardware-dependent items remain, and neither has any code work known to
-be needed** — (3) the camera-scanner path on a real tablet/phone browser
-(desktop testing so far used typed/wedge input); (4) one real print once
-the thermal printer arrives, to confirm 80mm sizing (stated from the start
-as the one thing that can't be verified without hardware).
+live in the browser, on all three older intake doctypes. Only the two
+hardware-dependent items remain from the original backend punch list, and
+neither has any code work known to be needed — (3) the camera-scanner path
+on a real tablet/phone browser (desktop testing so far used typed/wedge
+input); (4) one real print once the thermal printer arrives, to confirm
+80mm sizing (stated from the start as the one thing that can't be verified
+without hardware). **New, separate track since 2026-09-05**: the React/
+Vue custom frontend rebuild (see "Custom frontend rebuild" section further
+down) — F1 (scaffold + auth) is done; F2 (dashboard) is the next phase
+whenever picked up, no deadline.
 
 Two questions are open **for the accountant**, both recorded in the
 Purchase Voucher section: what `Phone.purchase_price` should store on a
@@ -2207,14 +2211,156 @@ Set — Phase Plan" section):
   listed here only so it isn't mistaken for a pending decision going
   forward): Phase 3 is built on the existing Desk/POS UI, with
   deliberately minimal, disposable cart-JS for payment capture — not the
-  planned custom React frontend. The React POS rebuild is deferred as its
-  own independently-scoped, behavior-preserving migration that will pick
-  up Phase 3's payment capture at that point rather than bundling a stack
-  migration with a brand-new feature on day one. Full reasoning at
+  planned custom frontend. The custom-frontend POS rebuild is deferred as
+  its own independently-scoped, behavior-preserving migration that will
+  pick up Phase 3's payment capture at that point rather than bundling a
+  stack migration with a brand-new feature on day one. Full reasoning at
   `~/.claude/plans/frontend-vs-backend-sequencing-decision.md`; the
   short version is that Phase 3's *backend* is fully UI-agnostic either
   way (consumed through whitelisted methods any UI calls the same way),
   so only the payment-capture screen itself was ever actually in question.
+
+### Custom frontend rebuild — stack re-evaluated 2026-09-05, F1 done
+
+The original 2026-09-02 scope note named the stack as "Doppio-scaffolded
+Vite + React + TypeScript + shadcn/ui." Before starting F1, the user asked
+for a serious comparison against Vue 3 + Frappe UI (Frappe's own official
+Vue component/data library), specifically because this project is solo-
+developer + heavy-AI-agent-authored and the client wants a fully custom
+product, not "ERPNext but prettier." Full 17-section research report
+(primary sources, tagged Verified/Inferred/Unknown) at
+`~/.claude/plans/plan-phase-4-lively-lobster.md`.
+
+**Decided: Vue 3 + Vite + TypeScript + Frappe UI + Tailwind CSS**, not
+React/shadcn/frappe-react-sdk. The deciding factor: Frappe's own team ships
+official, current AI-agent-facing grounding docs (`AGENTS.md` in
+`frappe/helpdesk`/`frappe/crm`/`frappe/gameplan`, `frontend-vue.md` in the
+official `frappe/skills` repo) for the Vue path and nothing equivalent for
+React — no official React component library exists at all, only community
+projects that exist specifically because of that gap. Five real, current,
+official production apps (CRM, Helpdesk, LMS, Insights, Gameplan) run this
+exact stack, including a Frappe School capstone that's a cart/checkout app
+against a live Frappe backend — directly analogous to this app's POS. The
+one real cost, not hidden: Frappe UI ships an opinionated design system
+("Espresso") baked into its Tailwind preset — all five official apps use
+it with zero color-token overrides — so a deliberate CSS-custom-property
+override was needed to prove a genuinely custom look was achievable, not
+assumed. `react-frontend-rebuild-roadmap.md` was updated in place to
+record the new stack and carries the same F1→F6 phase order (unchanged —
+the risk-isolation reasoning behind that order was always stack-agnostic).
+
+**F1 (scaffold + auth + architecture spike) — built, verified, merged to
+`develop`, and pushed, 2026-09-05.** 2 commits (`6384c6a`, `b6276f3`).
+Scaffolded via plain `yarn create vite` + manually wiring `frappe-ui`,
+Tailwind v3, and `vue-router` (installed, not yet used — no second route
+exists until F2) — **not Doppio**: confirmed empirically this bench has
+neither Doppio installed nor any native `bench add-spa`/`add-frappe-ui`
+command, so the official, tool-independent `frontend/`-folder convention
+(`frappe/skills`' `frontend-vue.md`) was used directly instead. `frontend/`
+sits at the **repo root**, a sibling of the `mobile_shop/` module dir (like
+real `frappe/crm`'s `frontend/` and `frappe/helpdesk`'s `desk/` — verified
+against `frappe-ui/vite`'s own `buildConfig.js`, which walks up from the
+Vite project's cwd looking for a *sibling* directory containing both
+`hooks.py` and `public/`; the first draft put `frontend/` one level too
+deep, inside the module dir, and had to be moved). A root `package.json`
+with the standard `postinstall`/`dev`/`build` shim scripts (`cd frontend
+&& yarn ...`) makes `bench build`'s `run_build_command_for_apps()` pick it
+up — traced directly in `apps/frappe/esbuild/esbuild.js` rather than
+assumed from the CRM/Helpdesk precedent alone.
+
+New `mobile_shop/www/shop.py` (`get_context` injecting `csrf_token`/`user`/
+`roles` via `frappe-ui`'s own `jinjaBootData` Vite plugin) plus a
+`website_route_rules` entry (`/shop/<path:app_path>` → `shop`) in
+`hooks.py` for client-side deep-linking. Vite build output
+(`mobile_shop/public/frontend/`, `mobile_shop/www/shop.html`) is
+gitignored, never committed — regenerated by `bench build` from
+`frontend/`'s source, same treatment this app already gives `public/js/`'s
+hand-written-only convention.
+
+One `App.vue` proves the four things this stack switch left genuinely
+unproven, per the roadmap's own revised F1 plan — all four confirmed live
+in the browser as the real Administrator account (non-permission-sensitive
+plumbing only; no role-gated screen exists yet to need the two real
+non-superuser accounts):
+
+1. **Same-origin session reuse** — a real `frappe.auth.get_logged_user` +
+   `frappe.core.doctype.user.user.get_roles` call, not a read of
+   `window.user` (which only ever populates in a **production** build;
+   `frappe-ui`'s own `jinjaBootData` plugin explicitly no-ops in Vite dev
+   mode, confirmed from its source before relying on it — the first draft
+   read `window.user` directly and could never have shown anything real in
+   the only environment available to test it in).
+2. **Design-token override** — a deliberately non-Espresso teal accent
+   color set in `tailwind.config.js`'s `theme.extend.colors`, rendered on
+   a real Frappe UI `Button`. Visually confirmed in the browser, not just
+   asserted from the CSS.
+3. **Camera-scanner port** — the existing `imei_scanner.js` `html5-qrcode`
+   wrapper ported to a Vue composable
+   (`frontend/src/composables/useImeiScanner.ts`). Confirmed this app's
+   camera scanning was already framework-independent (raw `html5-qrcode`/
+   `getUserMedia`, never a Frappe-specific mechanism) before treating this
+   as a straight port rather than a redesign; falls back to "Camera
+   unavailable" cleanly in this environment, matching the existing Desk
+   scanner's own documented behavior exactly (not a regression).
+4. **Whitelisted-method round trip** — `mobile_shop.utils.home_tiles.
+   get_homepage_stats`, unchanged, called via `frappe-ui`'s generic `call()`.
+
+**Four real bugs found and fixed during verification, worth remembering
+for F2 onward:**
+
+- **Vite's `server.allowedHosts` blocks the real site hostname by
+  default** — a fresh Vite project only trusts `localhost`; hitting the
+  dev server via `mobileshop.local:8080` (needed for the session cookie,
+  which is bound to that hostname) gets a 403 until the hostname is added
+  explicitly in `vite.config.ts`.
+- **`frappe-ui`'s raw-source-not-prebuilt-dist shape breaks Vite's
+  CJS→ESM dependency crawler for anything reached only through its own
+  internal imports**, not just our own `src/` imports. Hit twice: `Button`/
+  `Dialog`'s internal use of `FeatherIcon.vue` → `feather-icons` (a plain
+  CJS package) needed an explicit `optimizeDeps.include` entry in
+  `vite.config.ts` — `frappe-ui`'s own Vite plugin already does this for
+  `highlight.js`/`interactjs` but missed `feather-icons`. Then, once fixed,
+  `socket.io-client` → `socket.io-parser` → `debug` (also CJS) surfaced the
+  identical failure — traced to `app.use(FrappeUI, {socketio:false})` in
+  `main.ts`: that plugin unconditionally imports `initSocket` at module top
+  level regardless of the runtime option (ES imports are static), and
+  `frappe-ui`'s package entry is one barrel file re-exporting everything
+  (charts, editor, sockets, icons...), so Vite dev mode loads the *whole*
+  graph the moment anything at all is imported from `'frappe-ui'` — no
+  tree-shaking pre-bundle. Fixed at the real root: removed
+  `app.use(FrappeUI, ...)` entirely, since nothing in this app uses the
+  Options-API `$resources` mixin or `$call`/`$socket` globals it provides
+  (`call`/`Button`/`Dialog` are already imported directly) — `debug` still
+  needed its own `optimizeDeps.include` entry regardless, since the barrel
+  still touches the socket.io chain no matter what's actually imported
+  from it. **Any future CJS-interop error inside `node_modules/frappe-ui/`
+  itself (not our own code) is this same class of bug** — add the
+  offending package to `optimizeDeps.include`, don't assume it's a real
+  app-level error.
+- **A live CSRF error was a real, correct signal, not a bug** —
+  `frappe-ui`'s `call()` hardcodes `POST`, and Vite dev mode never sets
+  `window.csrf_token` (same reasoning as point 1 above), so every mutating
+  call hits Frappe's real CSRF check with no token — confirmed by reading
+  `frappe/auth.py`'s `validate_csrf_token()` directly rather than guessing.
+  Also surfaced, along the way, a `PermissionError` ("not whitelisted")
+  the **first** time this was tested live — turned out to be a genuinely
+  unauthenticated (Guest) session in that browser profile, not a CSRF or
+  code problem at all; `validate_csrf_token()` no-ops entirely when there's
+  no real session to check a token against, which is why the error
+  *changed shape* (CSRF → PermissionError) once nothing was logged in yet,
+  and changed back once a real login existed. **`ignore_csrf: 1` is now a
+  standing entry in `sites/mobileshop.local/site_config.json`** — a
+  documented, standard, dev-only workaround needed for every future
+  phase's Vite dev-mode testing too, not something to revert after each
+  check. **Must never be set on any real deployed/production site.**
+- **A genuine browser-renderer crash** ("Debugging connection was closed -
+  Render process gone") turned out to be unrelated to this app entirely —
+  reproduced cleanly with no crash via a separate, extension-free Chrome
+  profile; the `MaxListenersExceededWarning`/`ObjectMultiplex` console
+  noise immediately preceding the crash in the user's own browser pointed
+  at an installed extension's content script, not this page's code. Worth
+  remembering if a future browser check shows a similar unexplained crash:
+  try a clean/incognito profile before assuming an app bug.
 - **The accounting layer's architecture is SETTLED, not open** — listed
   here only so it isn't mistaken for a pending decision: fully bespoke,
   GL-ready `Shop Bank` master + payment child table, deliberately NOT ERPNext's
