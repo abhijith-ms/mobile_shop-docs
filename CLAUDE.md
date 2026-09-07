@@ -57,10 +57,15 @@ neither has any code work known to be needed — (3) the camera-scanner path
 on a real tablet/phone browser (desktop testing so far used typed/wedge
 input); (4) one real print once the thermal printer arrives, to confirm
 80mm sizing (stated from the start as the one thing that can't be verified
-without hardware). **New, separate track since 2026-09-05**: the React/
-Vue custom frontend rebuild (see "Custom frontend rebuild" section further
-down) — F1 (scaffold + auth) and F2 (dashboard) are both done; F3
-(reports) is the next phase whenever picked up, no deadline.
+without hardware). **Separate track, started 2026-09-05, now fully closed
+as of 2026-09-06**: the Vue custom frontend rebuild (see "Custom frontend
+rebuild" section further down) — F1 (scaffold + auth), F2 (dashboard), F3
+(12 reports), F4 (POS), F5 (Purchase Voucher entry), and F6 (Customer
+Receipt + Payment Voucher entry) are all built, reviewed, live-verified
+both roles, merged to `develop`, and pushed. The full F1–F6 roadmap from
+`~/.claude/plans/react-frontend-rebuild-roadmap.md` is complete — nothing
+scheduled next on this track. Records/admin back-office work deliberately
+stays on Desk per that roadmap's own scope boundary, not left over.
 
 Two questions are open **for the accountant**, both recorded in the
 Purchase Voucher section: what `Phone.purchase_price` should store on a
@@ -2220,7 +2225,7 @@ Set — Phase Plan" section):
   way (consumed through whitelisted methods any UI calls the same way),
   so only the payment-capture screen itself was ever actually in question.
 
-### Custom frontend rebuild — stack re-evaluated 2026-09-05, F1 done
+### Custom frontend rebuild — F1–F6 complete as of 2026-09-06
 
 The original 2026-09-02 scope note named the stack as "Doppio-scaffolded
 Vite + React + TypeScript + shadcn/ui." Before starting F1, the user asked
@@ -2427,6 +2432,245 @@ correctly saw all 12; clicking a DocType tile (Purchase Voucher) and a
 Report tile (Purchase Report) both navigated to the correct real Desk
 URL through the dev proxy with real data (`PV-00005/4/1`,
 `/app/query-report/Purchase%20Report`); no console errors either way.
+
+**F3 (reports) — built, reviewed, verified, merged to `develop`, and
+pushed, 2026-09-06.** 2 commits (build + one live-found fix). One generic
+`ReportView.vue` applied to all 12 Script Reports via a dynamic
+`/reports/:reportName` route, rather than 12 bespoke builds — the shape
+the roadmap always intended. Filter metadata (Date/Select/Data/Check/Link
+per report) copied statically from each report's own JSON rather than
+fetched from the core `Report` doctype at runtime, deliberately: the
+filter set across all 12 reports is small and fully known already, and
+this avoids reasoning about whether Staff can read `Report` doctype
+metadata for a payoff (a "generic" filter-config lookup) that buys
+nothing real. Link filters got a proper `LinkSelect.vue` component
+wrapping Frappe UI's own `Autocomplete`, searching via the same
+`frappe.desk.search.search_link` endpoint Desk's own Link field control
+uses — the same endpoint already verified working for Staff's plain
+`read: 1` grant back in the Shop Bank build. Sales Report's chart (the
+only one of the 12 with one) renders via Frappe UI's own `AxisChart`,
+with a small adapter converting the backend's old frappe-charts-shaped
+`{data:{labels,datasets}}` output into `AxisChart`'s row-oriented config.
+
+**A real bug found live during verification, not left as a known gap**:
+the chart's y-axis label rendered as "1.2K ↑ undefined" — traced to
+`AxisChart`'s own `eChartOptions.ts` building the axis name as
+`` `↑ ${config.yAxis.title}` ``, and the adapter had passed an empty
+`yAxis: {}`. Fixed by using the dataset's own name (e.g. "Sales (BHD)")
+as the axis title — a one-line fix, found only because the live browser
+pass looked at the actual rendered chart rather than trusting the data
+layer alone.
+
+All 12 reports individually verified live, both real accounts, not just
+the six exercised during the main pass: filters genuinely narrow results
+(not just render — confirmed a Link+Select combination on Purchase
+Report correctly composed to exactly the intersection), Profit/VAT
+Report correctly render full data for Admin and block Staff with a clean
+"You don't have permission to view this report." message (no raw stack
+trace — the traceback that appears in the browser console is
+`frappe-ui`'s own debug `console.log` of the response body, not a
+visible error), Customer Report confirmed byte-identical between Staff
+and Admin. One genuine Hard Rule 14 near-miss caught mid-pass: an
+"Admin" login first landed on the `Administrator` superuser bypass
+account, caught via `/app/user-profile` before it could be mistaken for
+a real role check, redone correctly as `msadmin.test@mobileshop.local`.
+Dashboard's Report-type tiles now route in-app instead of linking out to
+Desk's query-report URL.
+
+**F4 (POS rebuild) — built, reviewed, verified, merged to `develop`, and
+pushed, 2026-09-06.** 2 commits. A straight Vue port of
+`mobile_shop_pos.js`/`.py` (1216 + 499 lines) into one `PosView.vue` at
+`/pos` — zero backend changes, confirmed by reading the full controller
+first: every whitelisted method it needs (`pos_scan`, `create_pos_sale`,
+`preview_totals`, `void_pos_sale`, `browse_items`,
+`quick_select_products`, plus `sales_entry.search_phones` and
+`customer.search_customers_by_phone`) already existed and is fully
+UI-agnostic, exactly as the 2026-09-02 frontend-vs-backend sequencing
+decision predicted it would be. Reuses F1's `useImeiScanner` composable
+unchanged and F3's `LinkSelect` for the Customer picker — neither needed
+a single new line to support this phase. Every client-side rule from the
+original JS was mirrored, not reinvented: the mixing-conflict check, the
+phone-needs-named-customer / Credit-needs-named-customer / Card-needs-
+bank guardrails, and the PMS-cart-never-shows-a-VAT-breakdown rule (the
+same NBR requirement already enforced on the printed PMS invoice).
+Printing replicates what `frappe.utils.print()` actually does under the
+hood (opening a `/printview?...&trigger_print=1` URL via `window.open`),
+since that Desk-JS global isn't available in the standalone SPA.
+**Deliberately skipped**: the audio "click" cue on a successful scan
+(`frappe.utils.play_sound`) — no equivalent sound asset exists in this
+app's frontend; kept the visual flash, dropped the beep. Add back only
+if a real till environment actually misses it.
+
+**A real bug found live, not a design compromise**: `window.alert`/
+`window.confirm` (used for every validation message, Clear Cart, and
+Void Sale) are native browser dialogs — they block browser automation
+outright and are worse UX than the original Desk JS's styled
+`frappe.msgprint`/`frappe.confirm`. Replaced with a plain in-app notice
+banner and confirm modal, the same overlay pattern the search dialogs
+already used.
+
+Full live verification, real accounts: scanned/added a phone and an
+accessory, edited a cart line's rate and watched the live VAT preview
+recompute correctly (10.000 Inclusive → Net 9.091 / VAT 0.909, matching
+the shared `calculate_standard_vat()` formula exactly), completed a real
+Mixed-method sale (`SS-2026-09-00026`), confirmed accessory stock
+decremented and the 7-day quick-select ranking updated live from the new
+sale, verified print content correctly via a direct `/printview` hit
+with `trigger_print=0` (never the real print button — matches this
+project's own documented pitfall), voided the sale through the newly-
+fixed confirm modal and confirmed stock/phone status reverted exactly.
+One environment-only finding, not a bug: `/printview` isn't in Vite's
+documented dev-proxy list (`/app`, `/api`, `/assets`, `/files`,
+`/private`), so hitting print URLs through the `:8080` dev server 404s —
+a non-issue in production, where the built SPA is served same-origin
+from Frappe itself under `/shop/`. All test data cleaned up, zero
+residue confirmed independently — real earbuds/Charger stock and Shop
+Sale count unchanged.
+
+**F5 (Purchase Voucher entry) — built, reviewed, verified, merged to
+`develop`, and pushed, 2026-09-06.** 3 commits (build + two live-found
+fixes). Genuinely different shape from POS: this is a real document CRUD
+form (`frappe.client.insert`/`save`/`submit`/`cancel`/`get`, the core
+whitelisted methods, not a bespoke one) rather than a fire-and-forget
+action — confirmed by reading the full 859-line controller that
+`validate()` (line/total VAT calc, IMEI/remainder checks) runs
+identically on every Save whether draft or submit, so the client never
+needed to replicate that math — exactly how Desk's own generated form
+already works, just called from Vue instead. Reuses `LinkSelect`
+(Supplier, accessory Item) and `useImeiScanner` (the IMEI-capture
+dialog's camera button) with zero new shared components needed.
+
+**The load-bearing mechanic, found by reading Frappe's own source before
+writing any code**: `frappe.client.save/insert/submit` reconstruct the
+whole document from the JSON payload via `frappe.get_doc(dict)` — a
+child row missing its own `name` field is treated as a brand-new row on
+every save, not an update. Every phone/accessory/payment line in local
+state carries its server-assigned `name` (null only for a row added
+client-side this session, not yet persisted), and local state is always
+fully replaced from the server's response after every write, never
+hand-merged.
+
+**Three real bugs found live during verification, on top of that
+mechanic being right from the start:**
+- `LinkSelect.vue`'s displayed value was only ever set once at component
+  creation — it never synced when the parent set the `v-model` value
+  externally. Invisible in F3 (filters only ever change via the user's
+  own interaction inside the component), but exposed the moment F5
+  loaded an *existing* voucher and set `supplier`/`item_code` from
+  outside. Fixed with a `watch()` on the external model value, plus
+  added a `disabled` prop for read-only display on a submitted voucher.
+- Invoice Date defaulted to the wrong day in Bahrain's UTC+3: `new
+  Date().toISOString().slice(0,10)` converts to UTC first, so an early-
+  morning local time can roll back to the previous day's UTC date. Fixed
+  with a small local-calendar-fields helper instead.
+- `TimestampMismatchError` ("Document has been modified after you have
+  opened it") on Submit right after a Save: Frappe's optimistic-
+  concurrency check requires the document's own `modified` value to
+  round-trip on every save/submit of an existing doc, the exact same
+  rule as child-row `name` — just for the parent. Fixed by capturing
+  `modified` from every server response and including it once the
+  document has been saved once.
+
+Full live verification, real accounts: created a real voucher (supplier
+Midhu, one phone line with a fully-captured IMEI), saved (real docname
+`PV-00016` assigned via `frappe.client.insert`), reloaded to confirm
+child-row `name` round-tripping didn't duplicate the line, submitted
+(server-computed VAT: 200.000 Inclusive → Net 181.818 / VAT 18.182,
+confirmed via direct DB read, not just the UI), cancelled cleanly. All
+test data cleaned up via cancel-then-delete, zero residue — real
+Purchase Voucher count and Phone count both back to baseline. **Known,
+disclosed gap, not chased**: Cancel is shown to any role once a voucher
+is Submitted (server-side permission still correctly blocks Staff) —
+same pattern as POS's Void Sale button, not a new inconsistency, but the
+Staff-blocked path specifically wasn't re-verified live in this phase's
+pass.
+
+**F6 (Customer Receipt + Payment Voucher entry) — built, reviewed,
+verified, merged to `develop`, and pushed, 2026-09-06. This closes the
+full F1–F6 Vue frontend rebuild roadmap.** 2 commits (build + one
+live-found fix affecting all three F5/F6 forms). Scope decided with the
+user before building, per the roadmap's own explicit "answer this when
+the phase is reached, not before" flag: **port both to Vue**, even
+though Desk's own zero-custom-JS auto-generated form already works fine
+for each — chosen over leaving them on Desk, for a fully consistent
+in-app experience with nothing left except true back-office/admin work.
+Two more mirror-shaped submittable forms (`CustomerReceiptView.vue`
+against a Shop Sale, `PaymentVoucherView.vue` against a Purchase
+Voucher), built on the exact insert/save/submit/cancel/get + child-row
+`name` + parent `modified` round-tripping pattern F5 had already proven.
+**Deliberately matches Desk's parity exactly, not an enhancement**: no
+live outstanding-balance preview was added, because Desk's own form
+doesn't have one either (`get_outstanding_balance`/
+`get_outstanding_purchase_balance` aren't even whitelisted) — over-
+payment is still caught server-side at Save/Submit, same as Desk always
+did.
+
+**Reviewed via `ecc:vue-reviewer` and `ecc:typescript-reviewer` before
+merge, same precedent as F2.** Every finding fixed before merge: a
+`v-for` using array index as `:key` on a removable payment-line list
+(gave each line a stable client-side id instead); `resetDoc()` never
+cleared the notice banner, so a stale "Cancelled." could show against a
+freshly-opened unrelated document; the customer/supplier auto-fetch
+silently swallowed lookup failures instead of surfacing them like every
+other error path in these forms; and 12 duplicated
+`catch (err: any) { ...err.messages[0]... }` blocks across three files,
+discarding TypeScript's strict `unknown`-catch-variable default —
+extracted into a shared `getErrorMessage(err: unknown)` helper
+(`frontend/src/utils/errorMessage.ts`).
+
+**A real process gap the TypeScript review itself surfaced, not a code
+bug**: `npx vue-tsc --noEmit` with no `-p` flag had been checking *zero
+files* for the entire frontend-rebuild session — the root
+`tsconfig.json` is `{"files": [], "references": [...]}`, and without
+`-p tsconfig.app.json` there is nothing to typecheck at all, silently.
+Every "typecheck clean" claim from F3 onward was a no-op that happened
+to never get caught because `yarn build` (which does catch some
+type-adjacent issues via esbuild) kept passing regardless. Re-ran the
+corrected invocation against the whole app: F3 and F5 were genuinely
+clean; F6 had one real new error (an unused `fmt` import copy-pasted
+from `PurchaseVoucherView.vue`); and one real pre-existing bug from F4
+surfaced (an unused `FeatherIcon` import in `PosView.vue`) — both fixed
+in the same commit. **Use `npx vue-tsc --noEmit -p tsconfig.app.json`
+for every future frontend typecheck in this app, then filter output to
+`^src/` lines to ignore frappe-ui's own ~365 pre-existing vendor errors
+under `node_modules`** — the bare `--noEmit` invocation with no `-p`
+flag looks like it works (exits 0, prints nothing) and checks nothing.
+
+**A second real bug found live, after the review, affecting all three
+F5/F6 document forms at once**: Submit failed with
+`CannotChangeConstantError` ("Value cannot be changed for Created On").
+Traced to `frappe/model/meta.py`'s `standard_set_once_fields` —
+`creation` and `owner` are universally protected on every Frappe
+doctype, checked the exact same way `modified` already is, and none of
+the three `applyDoc()` functions had ever captured them from the
+server's own response despite the response including them. Confirmed by
+direct reproduction that this silently affected the already-merged
+`PurchaseVoucherView.vue` too, not only the two new F6 forms — fixed by
+round-tripping `creation`/`owner` the same way `modified` already was,
+in all three files at once.
+
+Full live verification, real accounts: Payment Voucher — picked a real
+Purchase Voucher (auto-fetched supplier "Midhu" correctly, confirmed via
+screenshot after `get_page_text()` was found not to read `<input>`
+element values at all — a verification-method gap, not a product bug),
+saved (real docname `PMV-2026-09-00004`), submitted a real 25.000
+payment against `PV-00001`'s 6750.000 balance (confirmed via direct DB
+read: 6750.000 → 6725.000), cancelled it (confirmed the balance reopened
+back to 6750.000). Customer Receipt — confirmed the identical auto-fetch
+wiring against a real Shop Sale (customer "abhijith" populated
+correctly); not pushed through a real Submit, since the real Shop Sale
+picked had no outstanding Credit balance to receive against and forcing
+one would have been new scope, not verification of what was built. Zero
+console errors throughout. All test data cleaned up, zero residue —
+Purchase Voucher/Payment Voucher/Customer Receipt counts all back to
+real baseline.
+
+**The full F1–F6 Vue frontend rebuild is complete.** Scaffold+auth,
+dashboard, all 12 reports, POS, Purchase Voucher entry, Customer
+Receipt, and Payment Voucher all live in-app now; Records and admin
+back-office work deliberately stay on Desk per the roadmap's own scope
+boundary from the start — not an oversight, not left over. Nothing is
+scheduled next on this track.
 
 - **The accounting layer's architecture is SETTLED, not open** — listed
   here only so it isn't mistaken for a pending decision: fully bespoke,

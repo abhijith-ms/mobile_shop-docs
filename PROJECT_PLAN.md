@@ -726,3 +726,21 @@ rules, permissions, Hard Rule 20's field contract — is fully UI-agnostic
 regardless of this decision, since it's consumed through whitelisted
 methods either UI calls the same way; only the payment-capture screen
 itself was ever actually in question).
+
+## Update 2026-09-06 — the frontend rebuild referenced above is complete
+
+The paragraphs above describe the state as decided 2026-09-02, before the
+stack itself was re-evaluated. Two corrections to read this section
+against current reality rather than as still-open: the stack is **Vue 3
++ Vite + TypeScript + Frappe UI + Tailwind**, not React/Doppio/shadcn
+(re-evaluated 2026-09-05, full reasoning in CLAUDE.md's "Custom frontend
+rebuild" section); and the deferred POS rebuild this section describes
+is no longer deferred — **F1 through F6 (scaffold+auth, dashboard, all
+12 reports, POS, Purchase Voucher entry, Customer Receipt, Payment
+Voucher) are all built, reviewed, live-verified, merged to `develop`,
+and pushed as of 2026-09-06.** The "picks up Phase 3's payment capture
+as just another part of what the POS already does" prediction above held
+exactly as stated — F4's POS rebuild absorbed the existing payment-lines
+UI with no separate design problem. Full phase-by-phase build narrative,
+every bug found and fixed, and all verification detail lives in
+CLAUDE.md's "Custom frontend rebuild" section, not duplicated here.
