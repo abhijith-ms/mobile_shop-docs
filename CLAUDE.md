@@ -67,11 +67,11 @@ both roles, merged to `develop`, and pushed. The full F1–F6 roadmap from
 scheduled next on this track. Records/admin back-office work deliberately
 stays on Desk per that roadmap's own scope boundary, not left over.
 
-Two questions are open **for the accountant**, both recorded in the
-Purchase Voucher section: what `Phone.purchase_price` should store on a
-VAT-exclusive line (currently stored exactly as entered), and whether a
-voucher mixing Used and standard-VAT lines should harden from a warning
-into a hard block.
+**Both accountant questions closed 2026-09-08 — no code change either
+way**, recorded in the Purchase Voucher section: `Phone.purchase_price`
+on a VAT-exclusive line stays exactly as entered (not grossed up), and a
+voucher mixing Used and standard-VAT lines stays a soft warning (not a
+hard block).
 
 **A full accountant meeting happened 2026-09-02** (separate from the two
 open questions above, which are still unanswered) — full detail in
@@ -2195,15 +2195,17 @@ urgent, none to be decided unilaterally:
   **Also answered 2026-07-29:** the three purchase-side reports were
   relaxed to permlevel 0 and now show money to Staff (commit `2037845`).
   Sales / Profit / VAT Report unchanged. See Hard Rule 3's table.
-- **What `Phone.purchase_price` stores on a VAT-exclusive line** — as
-  entered (current behaviour) or grossed up. The accountant's call. It
-  only ever matters for New phones, since Used lines carry no
-  `vat_treatment` and it is New-phone `purchase_price` that feeds no VAT
-  or profit maths.
-- **Whether a voucher mixing Used and standard-VAT lines should hard-block
-  rather than warn.** Currently a soft `msgprint`. Becomes a one-line
-  change to `frappe.throw` if the client confirms a Supplier is always
-  either a private individual or a registered distributor, never both.
+- ~~What `Phone.purchase_price` stores on a VAT-exclusive line~~
+  **Answered 2026-09-08: stays as-entered, no code change.** As entered
+  (current behaviour) was confirmed over grossed up. Only ever mattered
+  for New phones, since Used lines carry no `vat_treatment` and it is
+  New-phone `purchase_price` that feeds no VAT or profit maths.
+- ~~Whether a voucher mixing Used and standard-VAT lines should
+  hard-block rather than warn~~ **Answered 2026-09-08: stays a soft
+  warning, no code change.** The soft `msgprint` was confirmed over a
+  hard `frappe.throw` — the client-confirmation precondition (a Supplier
+  always private individual or registered distributor, never both) was
+  not met.
 - **Whether `Phone.model` staying blank is acceptable** for stock created
   through Purchase Voucher, or whether Sales/Inventory Report's Model
   column and filter should fall back to searching `brand`.
